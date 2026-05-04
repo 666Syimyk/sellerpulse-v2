@@ -49,3 +49,14 @@ htmlcov/
 
 # Uploaded user files
 uploads/
+
+# SQLite WAL/SHM journal files
+*.db-shm
+*.db-wal
+
+# Real data exports (sensitive)
+wb_real.*
+wb_headers.json
+
+# Claude Code local settings
+.claude/
