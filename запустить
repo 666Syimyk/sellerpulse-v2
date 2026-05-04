@@ -1,0 +1,31 @@
+# SellerPulse v2: запуск backend и frontend из PowerShell.
+# Можно выделить весь файл и выполнить в терминале PowerShell.
+
+$Root = if ($PSScriptRoot) { $PSScriptRoot } else { "c:\Users\user\Desktop\SellerPulsev2" }
+$Backend = Join-Path $Root "backend"
+$Frontend = Join-Path $Root "frontend"
+$Python = Join-Path $Backend ".venv\Scripts\python.exe"
+$BackendEnv = Join-Path $Backend ".env"
+$BackendEnvExample = Join-Path $Backend ".env.example"
+
+if (!(Test-Path $Python)) {
+  Set-Location -LiteralPath $Backend
+  python -m venv .venv
+}
+
+Set-Location -LiteralPath $Backend
+& $Python -m pip install -r requirements.txt
+
+if (!(Test-Path $BackendEnv) -and (Test-Path $BackendEnvExample)) {
+  Copy-Item -LiteralPath $BackendEnvExample -Destination $BackendEnv
+}
+
+$BackendCommand = "Set-Location -LiteralPath '$Backend'; .\.venv\Scripts\python.exe -m uvicorn main:app --reload --port 8000"
+$FrontendCommand = "Set-Location -LiteralPath '$Frontend'; npm install; npm run dev"
+
+Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $BackendCommand
+Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $FrontendCommand
+
+Set-Location -LiteralPath $Root
+Write-Host "Backend:  http://localhost:8000"
+Write-Host "Frontend: http://localhost:5173"

@@ -1,0 +1,10 @@
+.venv/
+.env
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+*.db
+test.db
+wb_real.*
+wb_headers.json

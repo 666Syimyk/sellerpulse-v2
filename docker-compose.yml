@@ -1,0 +1,54 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sellerpulse
+      POSTGRES_USER: sellerpulse
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sellerpulse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://sellerpulse:${DB_PASSWORD:-changeme}@db:5432/sellerpulse
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost}
+      ENABLE_SCHEDULER: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file: ./backend/.env
+    command: ["python", "worker.py"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://sellerpulse:${DB_PASSWORD:-changeme}@db:5432/sellerpulse
+      ENABLE_SCHEDULER: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${PORT:-80}:80"
+    depends_on:
+      - backend
+
+volumes:
+  db_data:
