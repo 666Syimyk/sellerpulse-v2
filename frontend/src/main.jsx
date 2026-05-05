@@ -127,7 +127,9 @@ function App() {
   }, []);
 
   function afterAuth(user) {
-    if (!user.subscription?.active) {
+    if (user.is_admin) {
+      setScreen("admin");
+    } else if (!user.subscription?.active) {
       setScreen("subscription");
     } else if (!user.has_wb_token) {
       setScreen("token");
@@ -480,7 +482,7 @@ function Dashboard({ user, onLogout, onNavigate }) {
       const active = result.status === "queued" || result.status === "running" || result.status === "partial";
       if (active) {
         dashboardReloadedRef.current = false;
-        syncPollRef.current = setTimeout(loadSyncStatus, 12000);
+        syncPollRef.current = setTimeout(loadSyncStatus, 3000);
       } else if (result.status === "completed" && !dashboardReloadedRef.current) {
         dashboardReloadedRef.current = true;
         load(period).catch(console.error);
@@ -2053,7 +2055,7 @@ function SyncProgressBanner({ syncStatus }) {
 
       {isActive && (
         <p className="sync-banner-hint">
-          Полная аналитика может занять до 1–3 часов. Можно закрыть страницу — синхронизация продолжится автоматически.
+          Синхронизация обычно занимает 2–5 минут. Можно закрыть страницу — синхронизация продолжится автоматически.
         </p>
       )}
       {isFailed && syncStatus.last_error && (
