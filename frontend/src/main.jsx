@@ -447,8 +447,9 @@ function TokenPage({ user, onConnected, onLogout, onNavigate }) {
   );
 }
 
+const DASHBOARD_PERIOD = "today";
+
 function Dashboard({ user, onLogout, onNavigate }) {
-  const [period, setPeriod] = useState("month");
   const [data, setData] = useState(null);
   const [syncStatus, setSyncStatus] = useState(null);
   const [syncMessage, setSyncMessage] = useState("");
@@ -456,18 +457,17 @@ function Dashboard({ user, onLogout, onNavigate }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortMode, setSortMode] = useState("attention");
-  const [financialSortMode, setFinancialSortMode] = useState("default");
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const syncPollRef = useRef(null);
   const dashboardReloadedRef = useRef(false);
   const autoRestartedRef = useRef(false);
 
-  async function load(nextPeriod = period) {
+  async function load() {
     setLoading(true);
     setError("");
     try {
-      const result = await api(`/dashboard?period=${nextPeriod}`);
+      const result = await api(`/dashboard?period=${DASHBOARD_PERIOD}`);
       setData(result);
     } catch (err) {
       setError(err.message);
@@ -486,7 +486,7 @@ function Dashboard({ user, onLogout, onNavigate }) {
         syncPollRef.current = setTimeout(loadSyncStatus, 3000);
       } else if (result.status === "completed" && !dashboardReloadedRef.current) {
         dashboardReloadedRef.current = true;
-        load(period).catch(console.error);
+        load().catch(console.error);
       } else if (
         result.status === "failed" &&
         result.last_error?.includes("прервана") &&
@@ -494,7 +494,7 @@ function Dashboard({ user, onLogout, onNavigate }) {
       ) {
         autoRestartedRef.current = true;
         try {
-          await api(`/dashboard/sync?period=${period}`, { method: "POST" });
+          await api(`/dashboard/sync?period=${DASHBOARD_PERIOD}`, { method: "POST" });
           syncPollRef.current = setTimeout(loadSyncStatus, 2000);
         } catch (_e) { /* silent */ }
       }
@@ -504,8 +504,8 @@ function Dashboard({ user, onLogout, onNavigate }) {
   }
 
   useEffect(() => {
-    load(period).catch(console.error);
-  }, [period]);
+    load().catch(console.error);
+  }, []);
 
   useEffect(() => {
     loadSyncStatus();
@@ -515,7 +515,7 @@ function Dashboard({ user, onLogout, onNavigate }) {
   async function exportExcel() {
     try {
       const token = getToken();
-      const response = await fetch(`${API_URL}/dashboard/export?period=${period}`, {
+      const response = await fetch(`${API_URL}/dashboard/export?period=${DASHBOARD_PERIOD}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) throw new Error("Ошибка экспорта");
@@ -523,7 +523,7 @@ function Dashboard({ user, onLogout, onNavigate }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `sellerpulse_${period}.xlsx`;
+      a.download = `sellerpulse_today.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -536,10 +536,9 @@ function Dashboard({ user, onLogout, onNavigate }) {
     setError("");
     clearTimeout(syncPollRef.current);
     try {
-      const result = await api(`/dashboard/sync?period=${period}`, { method: "POST" });
+      const result = await api(`/dashboard/sync?period=${DASHBOARD_PERIOD}`, { method: "POST" });
       setSyncMessage(result.message || "");
       if (result.sync_status) setSyncStatus(result.sync_status);
-      // Start polling for progress
       syncPollRef.current = setTimeout(loadSyncStatus, 3000);
     } catch (err) {
       setError(err.message);
@@ -548,18 +547,9 @@ function Dashboard({ user, onLogout, onNavigate }) {
     }
   }
 
-  const isFinancialReport = data?.data_source?.type === "financial_report";
   const metrics = data?.metrics || {};
   const products = data?.products || [];
   const statuses = useMemo(() => [...new Set(products.map((row) => row.status).filter(Boolean))], [products]);
-
-  const avgProfitPerUnit = useMemo(() => {
-    if (!isFinancialReport) return null;
-    const soldRows = products.filter((r) => (r.sold_qty || 0) > 0 && r.profit != null);
-    const totalQty = soldRows.reduce((s, r) => s + (r.sold_qty || 0), 0);
-    const totalProfit = soldRows.reduce((s, r) => s + r.profit, 0);
-    return totalQty > 0 ? totalProfit / totalQty : null;
-  }, [isFinancialReport, products]);
 
   const filteredProducts = useMemo(() => {
     const search = query.trim().toLowerCase();
@@ -567,48 +557,28 @@ function Dashboard({ user, onLogout, onNavigate }) {
       .filter((row) => statusFilter === "all" || row.status === statusFilter)
       .filter((row) => {
         if (!search) return true;
-        return [row.nm_id, row.vendor_code, row.name, row.brand, row.category, row.status, row.action]
+        return [row.nm_id, row.vendor_code, row.name, row.status, row.action]
           .some((value) => String(value || "").toLowerCase().includes(search));
       });
-
-    if (isFinancialReport) {
-      return filtered.sort((a, b) => {
-        if (financialSortMode === "profit_desc") return nullableNumber(b.profit, Number.NEGATIVE_INFINITY) - nullableNumber(a.profit, Number.NEGATIVE_INFINITY);
-        if (financialSortMode === "sales_desc") return nullableNumber(b.sold_qty, 0) - nullableNumber(a.sold_qty, 0);
-        if (financialSortMode === "margin_desc") return nullableNumber(b.margin, Number.NEGATIVE_INFINITY) - nullableNumber(a.margin, Number.NEGATIVE_INFINITY);
-        if (financialSortMode === "profit_per_unit_desc") return nullableNumber(b.profit_per_unit, Number.NEGATIVE_INFINITY) - nullableNumber(a.profit_per_unit, Number.NEGATIVE_INFINITY);
-        // default: sold_qty > 0 first (by profit desc), then expenses-without-sales, then no-sales
-        const aHasSales = (a.sold_qty || 0) > 0;
-        const bHasSales = (b.sold_qty || 0) > 0;
-        if (aHasSales && !bHasSales) return -1;
-        if (!aHasSales && bHasSales) return 1;
-        if (aHasSales && bHasSales) return nullableNumber(b.profit, Number.NEGATIVE_INFINITY) - nullableNumber(a.profit, Number.NEGATIVE_INFINITY);
-        const aHasExp = a.status === "Расходы без продаж";
-        const bHasExp = b.status === "Расходы без продаж";
-        if (aHasExp && !bHasExp) return -1;
-        if (!aHasExp && bHasExp) return 1;
-        return 0;
-      });
-    }
 
     const statusRank = {
       "Нет себестоимости": 0,
       "В минусе": 1,
-      "Минус с каждой продажи": 1,
-      "Расходы без продаж": 1,
       "Низкая маржа": 2,
-      "Заканчивается остаток": 3,
+      "Ожидает расходы WB": 3,
       "Нет данных WB": 4,
       "В плюсе": 5,
     };
     return filtered.sort((left, right) => {
       if (sortMode === "profit_asc") return nullableNumber(left.profit, Number.NEGATIVE_INFINITY) - nullableNumber(right.profit, Number.NEGATIVE_INFINITY);
       if (sortMode === "profit_desc") return nullableNumber(right.profit, Number.NEGATIVE_INFINITY) - nullableNumber(left.profit, Number.NEGATIVE_INFINITY);
-      if (sortMode === "sales_desc") return nullableNumber(right.after_spp, 0) - nullableNumber(left.after_spp, 0);
-      if (sortMode === "stock_asc") return nullableNumber(left.stock, Number.POSITIVE_INFINITY) - nullableNumber(right.stock, Number.POSITIVE_INFINITY);
+      if (sortMode === "sales_desc") return nullableNumber(right.sold_qty, 0) - nullableNumber(left.sold_qty, 0);
       return (statusRank[left.status] ?? 10) - (statusRank[right.status] ?? 10);
     });
-  }, [products, query, statusFilter, sortMode, financialSortMode, isFinancialReport]);
+  }, [products, query, statusFilter, sortMode]);
+
+  const hasWbApiData = data?.data_source?.type === "wb_api";
+  const hasPreliminaryData = hasWbApiData && products.some((r) => r.status === "Ожидает расходы WB");
 
   return (
     <AppShell
@@ -621,90 +591,50 @@ function Dashboard({ user, onLogout, onNavigate }) {
       syncing={syncing}
       searchValue={query}
       onSearchChange={setQuery}
-      searchPlaceholder="Поиск по товарам, артикулам, nmID, статусам..."
+      searchPlaceholder="Поиск по артикулу, nmID, названию..."
     >
       <section className="hero-card">
         <div className="hero-copy">
-          <p className="eyebrow">Dashboard</p>
-          <h1>Добро пожаловать, {data?.shop?.name || "WB кабинет"}</h1>
-          <p>Следите за продажами, расходами WB, чистой прибылью и товарами, которые требуют внимания сегодня.</p>
+          <p className="eyebrow">Dashboard — Сегодня</p>
+          <h1>{data?.shop?.name || "WB кабинет"}</h1>
+          <p>Товары, которые сегодня продались — с продажами, расходами WB и прибылью по каждому.</p>
           <div className="hero-meta">
             <StatusPill status={data?.shop?.token_status || "invalid"} />
-            <span>Последняя синхронизация: {dateTime(data?.shop?.last_sync_at)}</span>
+            <span>Синхронизация: {dateTime(data?.shop?.last_sync_at)}</span>
           </div>
         </div>
         <div className="hero-widget">
-          <div>
-            <small>Период</small>
-            <strong>{PERIODS.find(([id]) => id === period)?.[1] || period}</strong>
-          </div>
-          <div>
-            <small>Источник</small>
-            <strong>{data?.data_source?.type === "financial_report" ? "Фин. отчёт" : data?.data_source?.type === "wb_api" ? "WB API" : "—"}</strong>
-          </div>
-          <div>
-            <small>Токен</small>
-            <strong>{data?.shop?.token_status === "active" ? "Активен" : data?.shop?.token_status || "—"}</strong>
-          </div>
-          <div>
-            <small>Синхронизация</small>
-            <strong>{data?.shop?.last_sync_at ? dateTime(data.shop.last_sync_at).split(",")[0] : "—"}</strong>
-          </div>
+          <div><small>Период</small><strong>Сегодня</strong></div>
+          <div><small>Источник</small><strong>WB API</strong></div>
+          <div><small>Токен</small><strong>{data?.shop?.token_status === "active" ? "Активен" : data?.shop?.token_status || "—"}</strong></div>
+          <div><small>Последняя синхронизация</small><strong>{data?.shop?.last_sync_at ? dateTime(data.shop.last_sync_at).split(",")[0] : "—"}</strong></div>
         </div>
       </section>
 
       <div className="dashboard-toolbar">
-        <div className="segments">
-          {PERIODS.map(([id, label]) => <button key={id} className={period === id ? "selected" : ""} onClick={() => setPeriod(id)}>{label}</button>)}
-        </div>
         <div className="dashboard-filters">
           <button type="button" className="export-btn" onClick={exportExcel} title="Скачать Excel"><Download size={16} /> Excel</button>
           <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
             <option value="all">Все статусы</option>
             {statuses.map((status) => <option key={status} value={status}>{status}</option>)}
           </select>
-          {isFinancialReport ? (
-            <select value={financialSortMode} onChange={(event) => setFinancialSortMode(event.target.value)}>
-              <option value="default">По продажам (по умолчанию)</option>
-              <option value="profit_desc">По прибыли</option>
-              <option value="sales_desc">По кол-ву продаж</option>
-              <option value="margin_desc">По марже</option>
-              <option value="profit_per_unit_desc">По прибыли за 1 шт.</option>
-            </select>
-          ) : (
-            <select value={sortMode} onChange={(event) => setSortMode(event.target.value)}>
-              <option value="attention">Сначала требуют внимания</option>
-              <option value="profit_asc">Прибыль: сначала минус</option>
-              <option value="profit_desc">Прибыль: сначала плюс</option>
-              <option value="sales_desc">Выручка: сначала больше</option>
-              <option value="stock_asc">Остаток: сначала меньше</option>
-            </select>
-          )}
+          <select value={sortMode} onChange={(event) => setSortMode(event.target.value)}>
+            <option value="attention">Сначала требуют внимания</option>
+            <option value="profit_desc">Прибыль: сначала плюс</option>
+            <option value="profit_asc">Прибыль: сначала минус</option>
+            <option value="sales_desc">Продано: сначала больше</option>
+          </select>
         </div>
       </div>
 
-      {data?.data_source && data.data_source.type !== "no_report_for_period" && (
-        <div className={`notice ${isFinancialReport ? "info" : "warning"}`}>
-          {isFinancialReport ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
-          <div>
-            <strong>{data.data_source.label}</strong>
-            <span>
-              {isFinancialReport
-                ? `Точные данные из файла ${data.data_source.file_name || "WB"}.`
-                : data.data_source.message || "Предварительные данные WB API."}
-            </span>
-          </div>
-        </div>
+      {hasPreliminaryData && (
+        <div className="notice warning"><AlertTriangle size={18} /> Данные за сегодня предварительные. Точные расходы WB появятся после финансового отчёта.</div>
       )}
-      {data?.today_hint && <div className="notice warning"><AlertTriangle size={18} /> Данные за сегодня могут быть предварительными. Точные расходы WB появляются после формирования финансового отчёта.</div>}
-      {data?.data_source?.type === "no_report_for_period" && (
-        <div className="notice warning"><AlertTriangle size={18} /> {data.data_source.message}</div>
+      {data?.shop?.token_status === "rate_limited" && (
+        <div className="notice warning"><AlertTriangle size={18} /> WB временно ограничил запросы. Продажи и расходы появятся после снятия лимита.</div>
       )}
-      {data?.data_source?.type === "wb_api" && data?.shop?.token_status === "rate_limited" && (
-        <div className="notice warning"><AlertTriangle size={18} /> WB временно ограничил запросы. Товары загружены: {data?.products?.length || 0}. Продажи, остатки и расходы появятся после снятия лимита WB.</div>
-      )}
-      {data?.data_source?.type === "wb_api" && data?.shop?.token_status === "api_error" && (
-        <div className="notice warning"><AlertTriangle size={18} /> WB API временно отвечает с ошибками. Показываем последние сохранённые данные, недоступные поля отмечены как "Нет данных WB".</div>
+      {data?.shop?.token_status === "api_error" && (
+        <div className="notice warning"><AlertTriangle size={18} /> WB API временно отвечает с ошибками. Показываем последние сохранённые данные.</div>
       )}
       {error && <div className="notice warning"><AlertTriangle size={18} /> {error}</div>}
       {syncMessage && <div className="notice info"><Activity size={16} /> {syncMessage}</div>}
@@ -712,45 +642,25 @@ function Dashboard({ user, onLogout, onNavigate }) {
 
       {loading ? <div className="loader">Загружаем показатели</div> : !products.length ? (
         <DashboardEmptyState data={data} onNavigate={onNavigate} onSync={sync} syncing={syncing} />
-      ) : isFinancialReport ? (
-        <>
-          <section className="metrics-grid">
-            <Metric icon={ShoppingCart} label="Продано, шт." value={number(metrics.sold_qty)} trend="за период" />
-            <Metric icon={CircleDollarSign} label="Сумма продаж" value={money(metrics.sales_sum)} trend="по отчёту WB" />
-            <Metric icon={BadgePercent} label="К перечислению" value={money(metrics.to_pay)} trend="база прибыли" />
-            <Metric icon={Coins} label="Себестоимость" value={money(data?.expenses?.cost_price)} trend="сумма закупки" />
-            <Metric icon={TrendingUp} label="Чистая прибыль" value={money(metrics.net_profit)} trend="по отчёту WB" />
-            <Metric icon={LineChart} label="Прибыль с 1 шт." value={money(avgProfitPerUnit)} trend="среднее по товарам" />
-            <Metric icon={Gauge} label="Маржа" value={percent(metrics.margin)} trend="прибыль / выручка" />
-          </section>
-          <FinancialPulseTable
-            rows={filteredProducts}
-            allRows={products}
-            totalRows={products.length}
-            query={query}
-            onQueryChange={setQuery}
-            reload={() => load(period)}
-          />
-        </>
       ) : (
         <>
           <section className="metrics-grid">
-            <Metric icon={ShoppingCart} label="Продажи, шт." value={number(metrics.sold_qty)} trend="за период" />
-            <Metric icon={CircleDollarSign} label="Сумма продаж" value={money(metrics.sales_sum)} trend="после заказов" />
-            <Metric icon={BadgePercent} label="К перечислению" value={money(metrics.to_pay ?? metrics.after_spp)} trend="база прибыли" />
-            <Metric icon={TrendingUp} label="Чистая прибыль" value={money(metrics.net_profit)} trend="предварительно" />
-            <Metric icon={Gauge} label="Маржа" value={percent(metrics.margin)} trend="прибыль / выручка" />
-            <Metric icon={BarChart3} label="ДРР" value={percent(metrics.drr)} trend="реклама / выручка" />
+            <Metric icon={ShoppingCart} label="Продано сегодня, шт." value={number(metrics.sold_qty)} trend="уникальных позиций" />
+            <Metric icon={CircleDollarSign} label="Сумма продаж" value={money(metrics.sales_sum)} trend="до СПП" />
+            <Metric icon={BadgePercent} label="После СПП" value={money(metrics.after_spp)} trend="база расчётов" />
+            <Metric icon={TrendingUp} label="Чистая прибыль" value={money(metrics.net_profit)} trend={metrics.net_profit != null ? "предварительно" : "ожидает расходов WB"} />
+            <Metric icon={LineChart} label="Прибыль с 1 шт." value={money(metrics.avg_profit_per_unit)} trend="среднее по проданным" />
             <Metric icon={Undo2} label="Возвраты" value={number(metrics.returns_qty)} trend="шт." />
-            <Metric icon={PackageCheck} label="Процент выкупа" value={percent(metrics.buyout_percent)} trend="продажи / заказы" />
+            <Metric icon={Gauge} label="Маржа" value={percent(metrics.margin)} trend="прибыль / выручка" />
+            <Metric icon={BarChart3} label="Статус данных" value={hasPreliminaryData ? "Предварительные" : "WB API"} trend="источник" />
           </section>
           <Expenses expenses={data.expenses} revenue={metrics.after_spp} />
-          <PulseTable
+          <TodayPulseTable
             rows={filteredProducts}
             totalRows={products.length}
             query={query}
             onQueryChange={setQuery}
-            reload={() => load(period)}
+            reload={load}
           />
         </>
       )}
@@ -760,23 +670,23 @@ function Dashboard({ user, onLogout, onNavigate }) {
 
 function DashboardEmptyState({ data, onNavigate, onSync, syncing }) {
   const hasToken = data?.shop?.token_status && data.shop.token_status !== "invalid";
-  const noReportForPeriod = data?.data_source?.type === "no_report_for_period";
   return (
     <section className="panel empty-dashboard">
-      <div className="empty-dashboard-icon"><FileSpreadsheet size={30} /></div>
+      <div className="empty-dashboard-icon"><ShoppingCart size={30} /></div>
       <div>
-        <p className="eyebrow">{noReportForPeriod ? "Отчёт не за этот период" : "Основной сценарий"}</p>
-        <h2>{noReportForPeriod ? "Нет финансового отчёта за выбранный период" : "Загрузите финансовый отчёт WB"}</h2>
+        <p className="eyebrow">Сегодня</p>
+        <h2>Сегодня продаж пока нет</h2>
         <p>
-          {noReportForPeriod
-            ? `Загруженный файл «${data.data_source.file_name || "отчёт"}» не покрывает выбранный период. Загрузите отчёт WB за нужный период.`
-            : hasToken
-              ? "Токен подключён. Если WB API временно ограничил запросы, точная аналитика всё равно строится через Excel или ZIP финансового отчёта WB."
-              : "Нет данных WB. Подключите токен или загрузите финансовый отчёт WB, чтобы построить точную таблицу."}
+          {hasToken
+            ? "Синхронизируйте данные WB, чтобы увидеть сегодняшние продажи. Если продаж ещё не было — таблица появится после первой продажи."
+            : "Подключите WB API-токен, чтобы получать данные о продажах и расходах WB."}
         </p>
         <div className="actions">
-          <button type="button" className="primary" onClick={() => onNavigate("financial-report")}><UploadCloud size={17} /> Загрузить финансовый отчёт WB</button>
-          {hasToken && !noReportForPeriod && <button type="button" onClick={onSync} disabled={syncing}><RefreshCcw size={17} /> {syncing ? "Проверяем WB API" : "Проверить WB API"}</button>}
+          {hasToken
+            ? <button type="button" className="primary" onClick={onSync} disabled={syncing}><RefreshCcw size={17} /> {syncing ? "Синхронизируем..." : "Синхронизировать"}</button>
+            : <button type="button" className="primary" onClick={() => onNavigate("wb-token")}><KeyRound size={17} /> Подключить WB токен</button>
+          }
+          <button type="button" onClick={() => onNavigate("financial-report")}><UploadCloud size={17} /> Загрузить финансовый отчёт WB</button>
         </div>
       </div>
     </section>
@@ -2310,13 +2220,13 @@ function financialActionHint(row) {
   return "Проверьте показатели товара.";
 }
 
-function PulseTable({ rows, totalRows, query, onQueryChange, reload }) {
+function TodayPulseTable({ rows, totalRows, query, onQueryChange, reload }) {
   return (
     <section className="panel pulse-panel">
       <div className="panel-head">
         <div>
-          <h2>Рука на пульсе</h2>
-          <p>Товары, прибыльность, точность данных WB и действие на сегодня.</p>
+          <h2>Рука на пульсе — Сегодня</h2>
+          <p>Только товары, которые сегодня продались. Расходы WB появятся после финансового отчёта.</p>
         </div>
         <Database size={22} />
       </div>
@@ -2324,7 +2234,7 @@ function PulseTable({ rows, totalRows, query, onQueryChange, reload }) {
         <label className="search-box pulse-search">
           <Search size={18} />
           <input
-            placeholder="Быстрый поиск в таблице..."
+            placeholder="Быстрый поиск..."
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
           />
@@ -2335,12 +2245,36 @@ function PulseTable({ rows, totalRows, query, onQueryChange, reload }) {
         <table className="pulse-table">
           <thead>
             <tr>
-              {["Артикул", "Товар / nmID", "Продано", "Сумма продаж", "До СПП", "СПП", "После СПП", "Себестоимость", "Комиссия WB", "Логистика", "Хранение", "Возвраты", "Эквайринг", "СПА", "Реклама", "Налог", "Прибыль", "Маржа", "ДРР", "Остаток", "Дней хватит", "Статус", "Действие"].map((head) => <th key={head}>{head}</th>)}
+              <th>Артикул</th>
+              <th>Товар / nmID</th>
+              <th>Продано сегодня</th>
+              <th>Сумма продаж</th>
+              <th>Ср. цена</th>
+              <th>До СПП</th>
+              <th>СПП</th>
+              <th>После СПП</th>
+              <th>Себест. за 1 шт.</th>
+              <th>Себест. всего</th>
+              <th title="Информационно">Комиссия WB ℹ</th>
+              <th>Логистика</th>
+              <th>Хранение</th>
+              <th>Эквайринг</th>
+              <th>СПА</th>
+              <th>Реклама</th>
+              <th>Налог</th>
+              <th>Штрафы</th>
+              <th>Удержания</th>
+              <th>Прочие расходы</th>
+              <th>Прибыль</th>
+              <th>Прибыль за шт.</th>
+              <th>Маржа</th>
+              <th>Статус</th>
+              <th>Действие</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => <PulseRow key={row.nm_id} row={row} reload={reload} />)}
-            {!rows.length && <tr><td colSpan="23" className="empty">{totalRows ? "По выбранным фильтрам товары не найдены." : "После синхронизации WB здесь появятся товары."}</td></tr>}
+            {rows.map((row) => <TodayPulseRow key={row.nm_id} row={row} reload={reload} />)}
+            {!rows.length && <tr><td colSpan="25" className="empty">{totalRows ? "По выбранным фильтрам товары не найдены." : "Сегодня продаж пока нет."}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -2348,7 +2282,7 @@ function PulseTable({ rows, totalRows, query, onQueryChange, reload }) {
   );
 }
 
-function PulseRow({ row, reload }) {
+function TodayPulseRow({ row, reload }) {
   const [editing, setEditing] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -2361,10 +2295,7 @@ function PulseRow({ row, reload }) {
 
   async function save() {
     const parsed = parseCost(cost);
-    if (!parsed.ok) {
-      setRowError(parsed.message);
-      return;
-    }
+    if (!parsed.ok) { setRowError(parsed.message); return; }
     setSaving(true);
     setRowError("");
     try {
@@ -2382,13 +2313,15 @@ function PulseRow({ row, reload }) {
   }
 
   function runAction() {
-    if (row.action === "Указать себестоимость") {
-      setEditing(true);
-      setDetailsOpen(false);
-      return;
-    }
-    setDetailsOpen((current) => !current);
+    if (row.action === "Указать себестоимость") { setEditing(true); setDetailsOpen(false); return; }
+    setDetailsOpen((v) => !v);
   }
+
+  const noCost = row.unit_cost_price == null;
+  const avgPrice = row.sold_qty && row.after_spp != null ? row.after_spp / row.sold_qty : null;
+  const profitCls = row.profit != null && row.profit < 0 ? "cell-negative" : row.profit != null && row.profit > 0 ? "cell-positive" : "";
+  const ppuCls = `col-profit-unit${row.profit_per_unit != null && row.profit_per_unit < 0 ? " cell-negative" : row.profit_per_unit != null && row.profit_per_unit > 0 ? " cell-positive" : ""}`;
+  const isWaiting = row.status === "Ожидает расходы WB";
 
   return (
     <>
@@ -2397,49 +2330,47 @@ function PulseRow({ row, reload }) {
         <td className="product-cell"><strong>{row.name}</strong><small>nmID {row.nm_id}</small></td>
         <td>{number(row.sold_qty)}</td>
         <td>{money(row.sales_sum)}</td>
+        <td>{money(avgPrice)}</td>
         <td>{money(row.before_spp)}</td>
         <td>{money(row.spp)}</td>
         <td>{money(row.after_spp)}</td>
         <td>
           {editing ? (
             <div className="inline-cost row-cost-editor">
-              <input
-                className="mini"
-                type="number"
-                min="0"
-                step="0.01"
-                value={cost}
-                onChange={(event) => setCost(event.target.value)}
-                autoFocus
-              />
+              <input className="mini" type="number" min="0" step="0.01" value={cost} onChange={(e) => setCost(e.target.value)} autoFocus />
               <button type="button" className="small primary" onClick={save} disabled={saving}><Save size={14} /></button>
               <button type="button" className="small" onClick={() => { setEditing(false); setRowError(""); setCost(normalizeCostValue(row.unit_cost_price)); }}>Отмена</button>
             </div>
-          ) : money(row.unit_cost_price)}
+          ) : noCost ? <span className="no-cost-hint">Введите себестоимость</span> : money(row.unit_cost_price)}
           {rowError && <small className="row-error">{rowError}</small>}
         </td>
-        <td>{money(row.commission)}</td>
-        <td>{money(row.logistics)}</td>
-        <td>{money(row.storage)}</td>
-        <td>{money(row.returns)}</td>
-        <td>{money(row.acquiring)}</td>
-        <td>{money(row.spa)}</td>
+        <td>{noCost ? "—" : money(row.cost_price)}</td>
+        <td className="cell-info">{money(row.commission)}</td>
+        <td>{isWaiting ? <span className="no-data-label">Ожидается</span> : money(row.logistics)}</td>
+        <td>{isWaiting ? <span className="no-data-label">Ожидается</span> : money(row.storage)}</td>
+        <td>{isWaiting ? <span className="no-data-label">Ожидается</span> : money(row.acquiring)}</td>
+        <td>{isWaiting ? <span className="no-data-label">Ожидается</span> : money(row.spa)}</td>
         <td>{money(row.advertising)}</td>
-        <td>{money(row.tax)}</td>
-        <td>{money(row.profit)}</td>
-        <td>{percent(row.margin)}</td>
-        <td>{percent(row.drr)}</td>
-        <td>{number(row.stock)}</td>
-        <td>{number(row.days_left)}</td>
+        <td>{row.tax != null ? money(row.tax) : <span className="no-data-label">Не указан</span>}</td>
+        <td>{isWaiting ? <span className="no-data-label">Ожидается</span> : money(row.penalties)}</td>
+        <td>{isWaiting ? <span className="no-data-label">Ожидается</span> : money(row.deductions)}</td>
+        <td>{isWaiting ? <span className="no-data-label">Ожидается</span> : money(row.other_expenses)}</td>
+        <td className={profitCls}>
+          {isWaiting ? <span className="no-data-label">Ожидает расходов WB</span> : noCost ? "—" : money(row.profit)}
+        </td>
+        <td className={ppuCls}>
+          {isWaiting ? <span className="no-data-label">—</span> : noCost ? <span className="no-cost-hint">Нет себестоимости</span> : money(row.profit_per_unit)}
+        </td>
+        <td>{isWaiting || noCost ? "—" : percent(row.margin)}</td>
         <td><span className={`status ${statusClass(row.status)}`}>{row.status}</span></td>
         <td><button type="button" className="small" onClick={runAction}>{detailsOpen ? "Скрыть" : row.action}</button></td>
       </tr>
       {detailsOpen && (
         <tr className="detail-row">
-          <td colSpan="23">
+          <td colSpan="25">
             <div className="row-detail">
               <strong>{row.action}</strong>
-              <span>{actionHint(row)}</span>
+              <span>{todayActionHint(row)}</span>
             </div>
           </td>
         </tr>
@@ -2448,10 +2379,19 @@ function PulseRow({ row, reload }) {
   );
 }
 
+function todayActionHint(row) {
+  if (row.action === "Указать себестоимость") return "Укажите себестоимость на странице «Себестоимость», чтобы рассчитать прибыль.";
+  if (row.action === "Ждать финансовый отчёт WB") return "Товар продался сегодня. Точные расходы WB (логистика, комиссия, хранение) появятся после получения финансового отчёта WB — обычно раз в неделю.";
+  if (row.action === "Поднять цену") return "Товар уходит в минус. Проверьте себестоимость и расходы WB, затем пересмотрите цену.";
+  if (row.action === "Снизить расходы") return "Маржа ниже целевого уровня. Проверьте логистику, рекламу и комиссии.";
+  if (row.action === "Проверить рекламу") return "Товар прибыльный. Сравните ДРР с маржей и скорректируйте рекламный бюджет.";
+  return "Проверьте показатели товара.";
+}
+
 function statusClass(status) {
   if (status === "В плюсе") return "ok";
-  if (["В минусе", "Минус с каждой продажи", "Расходы без продаж", "Нет данных WB", "Нет данных"].includes(status)) return "bad";
-  if (status === "Нет продаж") return "neutral";
+  if (["В минусе", "Нет данных WB"].includes(status)) return "bad";
+  if (status === "Ожидает расходы WB") return "neutral";
   return "warn";
 }
 

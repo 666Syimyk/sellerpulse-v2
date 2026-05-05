@@ -50,21 +50,9 @@ def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
             return report_dashboard
         return _empty_dashboard(period)
 
-    # For all regular periods: WB API token takes priority over uploaded financial report
+    # Main dashboard: WB API only — financial report is for the dedicated report tab
     wb_token = _active_token(db, user_id)
     if not wb_token:
-        # No token — try financial report as the only data source
-        report_dashboard = _dashboard_from_latest_financial_report(db, user_id, period, date_from, date_to)
-        if report_dashboard is not None:
-            return report_dashboard
-        has_any_report = db.scalar(
-            select(FinancialReport)
-            .where(FinancialReport.user_id == user_id, FinancialReport.source_rows_json.is_not(None))
-            .order_by(FinancialReport.id.desc())
-        )
-        if has_any_report:
-            validation_failed = has_any_report.validation_json and has_any_report.validation_json.get("status") != "OK"
-            return _no_report_for_period_dashboard(period, has_any_report, validation_failed=bool(validation_failed))
         return _empty_dashboard(period)
 
     products = {
@@ -92,12 +80,12 @@ def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
     for expense in expenses:
         expenses_by_nm[expense.nm_id].append(expense)
 
-    all_nm_ids = sorted(set(products) | set(sales_by_nm) | set(expenses_by_nm) | set(stocks))
+    # For "today": only show products with actual sales today (not entire catalog)
+    if period == "today":
+        all_nm_ids = sorted(set(sales_by_nm.keys()))
+    else:
+        all_nm_ids = sorted(set(products) | set(sales_by_nm) | set(expenses_by_nm) | set(stocks))
     if not all_nm_ids:
-        # No WB API data yet — fall back to financial report if available
-        report_dashboard = _dashboard_from_latest_financial_report(db, user_id, period, date_from, date_to)
-        if report_dashboard is not None:
-            return report_dashboard
         return _empty_dashboard(period, wb_token)
 
     rows = []
@@ -134,7 +122,7 @@ def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
             days_left = round(stock_qty / max(sold_qty / max((date_to - date_from).days + 1, 1), 0.01), 1)
 
         accuracy = _accuracy(item_expenses, has_missing_wb_expense)
-        status, action = _product_status(product, profit, after_spp, stock_qty, days_left, has_missing_wb_expense)
+        status, action = _product_status(product, profit, after_spp, stock_qty, days_left, has_missing_wb_expense, period=period, sold_qty=sold_qty)
         sale_qty_total += sold_qty
 
         row = {
@@ -180,6 +168,15 @@ def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
     expenses_block = {field: _money(_sum_nullable(totals[field])) for field in EXPENSE_FIELDS}
     expenses_block["cost_price"] = _money(_sum_nullable(totals["cost_price"]))
 
+    profit_qty_pairs = [
+        (p, q) for p, q in zip(totals["profit"], totals["sold_qty"])
+        if p is not None and q and q > 0
+    ]
+    avg_profit_per_unit = (
+        sum(p for p, q in profit_qty_pairs) / sum(q for p, q in profit_qty_pairs)
+        if profit_qty_pairs else None
+    )
+
     result = {
         "period": period,
         "shop": {
@@ -189,9 +186,9 @@ def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
         },
         "data_source": {
             "type": "wb_api",
-            "label": "Источник: WB API — предварительные данные",
+            "label": "Данные за сегодня — WB API",
             "is_exact": False,
-            "message": "Предварительные данные WB API. Для точной сверки загрузите финансовый отчёт WB.",
+            "message": "Данные за сегодня предварительные. Точные расходы WB появятся после финансового отчёта.",
         },
         "today_hint": period == "today",
         "metrics": {
@@ -199,6 +196,7 @@ def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
             "sales_sum": _money(_sum_nullable(totals["before_spp"])),
             "after_spp": _money(after_spp_total),
             "net_profit": _money(profit_total),
+            "avg_profit_per_unit": _money(avg_profit_per_unit),
             "margin": _percent(profit_total, after_spp_total),
             "drr": _percent(advertising_total, after_spp_total),
             "returns_qty": returns_qty_total,
@@ -452,10 +450,12 @@ def _accuracy(item_expenses: list[Expense], has_missing_wb_expense: bool) -> str
     return "Оценочный расчёт"
 
 
-def _product_status(product, profit, after_spp, stock_qty, days_left, has_missing_wb_expense):
+def _product_status(product, profit, after_spp, stock_qty, days_left, has_missing_wb_expense, period="", sold_qty=0):
     if product is None or product.cost_price is None:
         return "Нет себестоимости", "Указать себестоимость"
     if has_missing_wb_expense:
+        if period == "today" and sold_qty > 0:
+            return "Ожидает расходы WB", "Ждать финансовый отчёт WB"
         return "Нет данных WB", "Проверить карточку товара"
     if days_left is not None and days_left <= 7:
         return "Заканчивается остаток", "Пополнить остаток"
