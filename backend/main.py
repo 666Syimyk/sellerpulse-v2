@@ -1,10 +1,13 @@
 import asyncio
 import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from config import get_settings
 from database import Base, engine, run_sqlite_migrations
@@ -74,3 +77,21 @@ app.include_router(sync.router)
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+frontend_dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+if frontend_dist.exists():
+    assets_dir = frontend_dist / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    def spa_index():
+        return FileResponse(frontend_dist / "index.html")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def spa_fallback(full_path: str):
+        candidate = frontend_dist / full_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(frontend_dist / "index.html")
