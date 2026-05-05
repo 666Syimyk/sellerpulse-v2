@@ -25,7 +25,8 @@ class PromoteIn(BaseModel):
 @router.post("/promote")
 def promote_to_admin(payload: PromoteIn, db: Session = Depends(get_db)):
     settings = get_settings()
-    if payload.secret != settings.admin_secret:
+    has_admin = db.scalar(select(User).where(User.is_admin == True)) is not None  # noqa: E712
+    if has_admin and payload.secret != settings.admin_secret:
         raise HTTPException(status_code=403, detail="Неверный секрет")
     user = db.scalar(select(User).where(User.email == payload.email))
     if not user:
