@@ -42,21 +42,29 @@ ESTIMATED_ACCURACY_VALUES = {"Оценочный расчёт"}
 
 def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
     date_from, date_to = period_dates(period)
-    report_dashboard = _dashboard_from_latest_financial_report(db, user_id, period, date_from, date_to)
-    if report_dashboard is not None:
-        return report_dashboard
 
-    # If user has parsed financial report but none match the period, show explicit message
-    has_any_report = db.scalar(
-        select(FinancialReport)
-        .where(FinancialReport.user_id == user_id, FinancialReport.source_rows_json.is_not(None))
-        .order_by(FinancialReport.id.desc())
-    )
-    if has_any_report:
-        return _no_report_for_period_dashboard(period, has_any_report)
+    # "report" period is exclusively for the financial report tab
+    if period == "report":
+        report_dashboard = _dashboard_from_latest_financial_report(db, user_id, period, date_from, date_to)
+        if report_dashboard is not None:
+            return report_dashboard
+        return _empty_dashboard(period)
 
+    # For all regular periods: WB API token takes priority over uploaded financial report
     wb_token = _active_token(db, user_id)
     if not wb_token:
+        # No token — try financial report as the only data source
+        report_dashboard = _dashboard_from_latest_financial_report(db, user_id, period, date_from, date_to)
+        if report_dashboard is not None:
+            return report_dashboard
+        has_any_report = db.scalar(
+            select(FinancialReport)
+            .where(FinancialReport.user_id == user_id, FinancialReport.source_rows_json.is_not(None))
+            .order_by(FinancialReport.id.desc())
+        )
+        if has_any_report:
+            validation_failed = has_any_report.validation_json and has_any_report.validation_json.get("status") != "OK"
+            return _no_report_for_period_dashboard(period, has_any_report, validation_failed=bool(validation_failed))
         return _empty_dashboard(period)
 
     products = {
@@ -86,6 +94,10 @@ def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
 
     all_nm_ids = sorted(set(products) | set(sales_by_nm) | set(expenses_by_nm) | set(stocks))
     if not all_nm_ids:
+        # No WB API data yet — fall back to financial report if available
+        report_dashboard = _dashboard_from_latest_financial_report(db, user_id, period, date_from, date_to)
+        if report_dashboard is not None:
+            return report_dashboard
         return _empty_dashboard(period, wb_token)
 
     rows = []
@@ -379,19 +391,25 @@ def _empty_dashboard(period: str, wb_token: WbToken | None = None) -> dict:
     }
 
 
-def _no_report_for_period_dashboard(period: str, latest_report: FinancialReport) -> dict:
+def _no_report_for_period_dashboard(period: str, latest_report: FinancialReport, *, validation_failed: bool = False) -> dict:
     report_period = ""
     if latest_report.period_start and latest_report.period_end:
         report_period = f" ({latest_report.period_start.strftime('%d.%m.%Y')} — {latest_report.period_end.strftime('%d.%m.%Y')})"
+    if validation_failed:
+        label = "Ошибка проверки финансового отчёта"
+        message = f"Загруженный отчёт{report_period} содержит расхождения с данными WB. Проверьте отчёт на странице «Финансовый отчёт» или загрузите новый."
+    else:
+        label = "Нет финансового отчёта за выбранный период"
+        message = f"Загруженный отчёт{report_period} не покрывает выбранный период. Загрузите финансовый отчёт WB за нужный период."
     return {
         "period": period,
         "shop": {"name": None, "token_status": "active", "last_sync_at": None},
         "data_source": {
             "type": "no_report_for_period",
-            "label": "Нет финансового отчёта за выбранный период",
+            "label": label,
             "is_exact": False,
             "file_name": latest_report.file_name,
-            "message": f"Загруженный отчёт{report_period} не покрывает выбранный период. Загрузите финансовый отчёт WB за нужный период.",
+            "message": message,
         },
         "today_hint": False,
         "metrics": {
