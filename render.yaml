@@ -2,7 +2,6 @@ services:
   - name: sellerpulse-frontend
     type: web
     runtime: static
-    plan: free
     rootDir: frontend
     buildCommand: npm ci && VITE_API_URL=$BACKEND_URL npm run build
     staticPublishPath: dist
@@ -35,37 +34,7 @@ services:
       - key: ENABLE_SCHEDULER
         value: "true"
       - key: RUN_SYNC_WORKER_IN_WEB
-        value: "false"
-      - key: PYTHON_VERSION
-        value: "3.12.8"
-
-  - name: sellerpulse-worker
-    type: worker
-    runtime: python
-    plan: free
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: python worker.py
-    autoDeploy: true
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: sellerpulse-db
-          property: connectionString
-      - key: SECRET_KEY
-        fromService:
-          name: sellerpulse-api
-          type: web
-          envVarKey: SECRET_KEY
-      - key: ADMIN_SECRET
-        fromService:
-          name: sellerpulse-api
-          type: web
-          envVarKey: ADMIN_SECRET
-      - key: ENABLE_SCHEDULER
-        value: "false"
-      - key: RUN_SYNC_WORKER_IN_WEB
-        value: "false"
+        value: "true"
       - key: PYTHON_VERSION
         value: "3.12.8"
 
