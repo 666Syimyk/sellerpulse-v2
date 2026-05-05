@@ -75,10 +75,13 @@ def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
 
     sales_by_nm = defaultdict(list)
     expenses_by_nm = defaultdict(list)
+    orders_by_nm = defaultdict(list)
     for sale in sales:
         sales_by_nm[sale.nm_id].append(sale)
     for expense in expenses:
         expenses_by_nm[expense.nm_id].append(expense)
+    for order in orders:
+        orders_by_nm[order.nm_id].append(order)
 
     # For "today": only show products with actual sales today (not entire catalog)
     if period == "today":
@@ -99,7 +102,9 @@ def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
         product = products.get(nm_id)
         item_sales = sales_by_nm.get(nm_id, [])
         item_expenses = expenses_by_nm.get(nm_id, [])
+        item_orders = orders_by_nm.get(nm_id, [])
         sold_qty = sum(s.quantity for s in item_sales)
+        orders_qty = sum(o.quantity for o in item_orders) if item_orders else None
         shown_sold_qty = None if sales_data_missing else sold_qty
         before_spp = _sum_nullable([s.total_before_spp for s in item_sales])
         spp = _sum_nullable([s.spp_amount for s in item_sales])
@@ -125,6 +130,9 @@ def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
         status, action = _product_status(product, profit, after_spp, stock_qty, days_left, has_missing_wb_expense, period=period, sold_qty=sold_qty)
         sale_qty_total += sold_qty
 
+        profit_per_unit = profit / sold_qty if profit is not None and sold_qty else None
+        buyout_percent = _percent(sold_qty, orders_qty) if orders_qty else None
+
         row = {
             "vendor_code": product.vendor_code if product else "",
             "name": product.name if product else f"Товар {nm_id}",
@@ -133,14 +141,17 @@ def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
             "nm_id": nm_id,
             "unit_cost_price": _money(product.cost_price) if product else None,
             "sold_qty": shown_sold_qty,
+            "orders_qty": orders_qty,
+            "buyout_percent": buyout_percent,
             "sales_sum": _money(before_spp),
             "before_spp": _money(before_spp),
             "spp": _money(spp),
             "after_spp": _money(after_spp),
+            "to_pay": None,  # WB API path: not available until weekly finance report
             "cost_price": _money(cost_price_total),
             **{field: _money(value) for field, value in expense_values.items()},
             "profit": _money(profit),
-            "profit_per_unit": _money(profit / sold_qty) if profit is not None and sold_qty else None,
+            "profit_per_unit": _money(profit_per_unit),
             "margin": _percent(profit, after_spp),
             "drr": _percent(advertising, after_spp),
             "stock": stock_qty,
@@ -455,13 +466,14 @@ def _product_status(product, profit, after_spp, stock_qty, days_left, has_missin
         return "Нет себестоимости", "Указать себестоимость"
     if has_missing_wb_expense:
         if period == "today" and sold_qty > 0:
-            return "Ожидает расходы WB", "Ждать финансовый отчёт WB"
+            return "Ожидает расходы WB", "Проверить позже"
         return "Нет данных WB", "Проверить карточку товара"
-    if days_left is not None and days_left <= 7:
-        return "Заканчивается остаток", "Пополнить остаток"
+    profit_per_unit = profit / sold_qty if profit is not None and sold_qty else None
+    if profit_per_unit is not None and profit_per_unit < 0:
+        return "Минус с каждой продажи", "Срочно проверить цену"
     if profit is not None and profit < 0:
-        return "В минусе", "Поднять цену"
+        return "В минусе", "Проверить цену и расходы"
     margin = _percent(profit, after_spp)
     if margin is not None and margin < 15:
-        return "Низкая маржа", "Снизить расходы"
-    return "В плюсе", "Проверить рекламу"
+        return "Низкая маржа", "Поднять цену"
+    return "В плюсе", "Контролировать остатки"

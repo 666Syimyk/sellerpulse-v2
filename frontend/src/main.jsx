@@ -2248,11 +2248,14 @@ function TodayPulseTable({ rows, totalRows, query, onQueryChange, reload }) {
               <th>Артикул</th>
               <th>Товар / nmID</th>
               <th>Продано сегодня</th>
+              <th>Заказано сегодня</th>
+              <th>% выкупа</th>
               <th>Сумма продаж</th>
-              <th>Ср. цена</th>
+              <th>Ср. цена продажи</th>
               <th>До СПП</th>
               <th>СПП</th>
               <th>После СПП</th>
+              <th>К перечислению</th>
               <th>Себест. за 1 шт.</th>
               <th>Себест. всего</th>
               <th title="Информационно">Комиссия WB ℹ</th>
@@ -2268,13 +2271,14 @@ function TodayPulseTable({ rows, totalRows, query, onQueryChange, reload }) {
               <th>Прибыль</th>
               <th>Прибыль за шт.</th>
               <th>Маржа</th>
+              <th>Остаток</th>
               <th>Статус</th>
               <th>Действие</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => <TodayPulseRow key={row.nm_id} row={row} reload={reload} />)}
-            {!rows.length && <tr><td colSpan="25" className="empty">{totalRows ? "По выбранным фильтрам товары не найдены." : "Сегодня продаж пока нет."}</td></tr>}
+            {!rows.length && <tr><td colSpan="29" className="empty">{totalRows ? "По выбранным фильтрам товары не найдены." : "Сегодня продаж пока нет."}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -2329,11 +2333,14 @@ function TodayPulseRow({ row, reload }) {
         <td>{row.vendor_code || "—"}</td>
         <td className="product-cell"><strong>{row.name}</strong><small>nmID {row.nm_id}</small></td>
         <td>{number(row.sold_qty)}</td>
+        <td>{row.orders_qty != null ? number(row.orders_qty) : <span className="no-data-label">Нет данных</span>}</td>
+        <td>{row.buyout_percent != null ? percent(row.buyout_percent) : <span className="no-data-label">Нет данных</span>}</td>
         <td>{money(row.sales_sum)}</td>
         <td>{money(avgPrice)}</td>
         <td>{money(row.before_spp)}</td>
         <td>{money(row.spp)}</td>
         <td>{money(row.after_spp)}</td>
+        <td>{row.to_pay != null ? money(row.to_pay) : <span className="no-data-label">Ожидается</span>}</td>
         <td>
           {editing ? (
             <div className="inline-cost row-cost-editor">
@@ -2362,12 +2369,13 @@ function TodayPulseRow({ row, reload }) {
           {isWaiting ? <span className="no-data-label">—</span> : noCost ? <span className="no-cost-hint">Нет себестоимости</span> : money(row.profit_per_unit)}
         </td>
         <td>{isWaiting || noCost ? "—" : percent(row.margin)}</td>
+        <td>{row.stock != null ? number(row.stock) : <span className="no-data-label">Нет данных</span>}</td>
         <td><span className={`status ${statusClass(row.status)}`}>{row.status}</span></td>
         <td><button type="button" className="small" onClick={runAction}>{detailsOpen ? "Скрыть" : row.action}</button></td>
       </tr>
       {detailsOpen && (
         <tr className="detail-row">
-          <td colSpan="25">
+          <td colSpan="29">
             <div className="row-detail">
               <strong>{row.action}</strong>
               <span>{todayActionHint(row)}</span>
@@ -2380,17 +2388,18 @@ function TodayPulseRow({ row, reload }) {
 }
 
 function todayActionHint(row) {
-  if (row.action === "Указать себестоимость") return "Укажите себестоимость на странице «Себестоимость», чтобы рассчитать прибыль.";
-  if (row.action === "Ждать финансовый отчёт WB") return "Товар продался сегодня. Точные расходы WB (логистика, комиссия, хранение) появятся после получения финансового отчёта WB — обычно раз в неделю.";
-  if (row.action === "Поднять цену") return "Товар уходит в минус. Проверьте себестоимость и расходы WB, затем пересмотрите цену.";
-  if (row.action === "Снизить расходы") return "Маржа ниже целевого уровня. Проверьте логистику, рекламу и комиссии.";
-  if (row.action === "Проверить рекламу") return "Товар прибыльный. Сравните ДРР с маржей и скорректируйте рекламный бюджет.";
+  if (row.action === "Указать себестоимость") return "Укажите себестоимость на странице «Себестоимость», чтобы рассчитать прибыль с каждой продажи.";
+  if (row.action === "Проверить позже") return "Товар продался сегодня. Точные расходы WB (логистика, комиссия, хранение) появятся после получения финансового отчёта WB.";
+  if (row.action === "Срочно проверить цену") return `Каждая продажа приносит убыток ${money(row.profit_per_unit)} за штуку. Немедленно пересмотрите цену или себестоимость.`;
+  if (row.action === "Проверить цену и расходы") return `Общая прибыль отрицательная: ${money(row.profit)}. Проверьте себестоимость, логистику и цену продажи.`;
+  if (row.action === "Поднять цену") return `Маржа ${percent(row.margin)} — ниже 15%. Поднимите цену или снизьте расходы.`;
+  if (row.action === "Контролировать остатки") return `Товар в плюсе: ${money(row.profit_per_unit)} с каждой штуки. Следите за остатками (${row.stock != null ? number(row.stock) + " шт." : "данных нет"}).`;
   return "Проверьте показатели товара.";
 }
 
 function statusClass(status) {
   if (status === "В плюсе") return "ok";
-  if (["В минусе", "Нет данных WB"].includes(status)) return "bad";
+  if (["В минусе", "Минус с каждой продажи", "Нет данных WB"].includes(status)) return "bad";
   if (status === "Ожидает расходы WB") return "neutral";
   return "warn";
 }
