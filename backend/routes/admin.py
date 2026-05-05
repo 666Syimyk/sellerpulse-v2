@@ -4,16 +4,35 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from config import get_settings
 from database import get_db
 from models.entities import Subscription, SubscriptionHistory, SubscriptionStatus, User
 from routes.deps import admin_user
 from services.subscription import create_trial, is_active, serialize
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+class PromoteIn(BaseModel):
+    email: EmailStr
+    secret: str
+
+
+@router.post("/promote")
+def promote_to_admin(payload: PromoteIn, db: Session = Depends(get_db)):
+    settings = get_settings()
+    if payload.secret != settings.admin_secret:
+        raise HTTPException(status_code=403, detail="Неверный секрет")
+    user = db.scalar(select(User).where(User.email == payload.email))
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    user.is_admin = True
+    db.commit()
+    return {"ok": True, "email": user.email, "is_admin": user.is_admin}
 
 
 @router.get("/users")
