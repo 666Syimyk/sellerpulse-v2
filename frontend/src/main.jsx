@@ -36,7 +36,7 @@ import {
   UserRound,
   WalletCards,
 } from "lucide-react";
-import { api, getToken, setToken, subscriptionExpiredHandlers } from "./api/client";
+import { API_URL, api, getToken, setToken, subscriptionExpiredHandlers } from "./api/client";
 import { dateTime, money, number, percent } from "./utils/format";
 import "./styles.css";
 
@@ -502,7 +502,6 @@ function Dashboard({ user, onLogout, onNavigate }) {
   async function exportExcel() {
     try {
       const token = getToken();
-      const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
       const response = await fetch(`${API_URL}/dashboard/export?period=${period}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
