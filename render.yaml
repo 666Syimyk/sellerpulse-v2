@@ -6,6 +6,10 @@ services:
     buildCommand: npm ci && VITE_API_URL=$BACKEND_URL npm run build
     staticPublishPath: dist
     autoDeploy: true
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
     envVars:
       - key: BACKEND_URL
         fromService:
