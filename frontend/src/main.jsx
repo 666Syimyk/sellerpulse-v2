@@ -461,6 +461,7 @@ function Dashboard({ user, onLogout, onNavigate }) {
   const [syncing, setSyncing] = useState(false);
   const syncPollRef = useRef(null);
   const dashboardReloadedRef = useRef(false);
+  const autoRestartedRef = useRef(false);
 
   async function load(nextPeriod = period) {
     setLoading(true);
@@ -486,6 +487,16 @@ function Dashboard({ user, onLogout, onNavigate }) {
       } else if (result.status === "completed" && !dashboardReloadedRef.current) {
         dashboardReloadedRef.current = true;
         load(period).catch(console.error);
+      } else if (
+        result.status === "failed" &&
+        result.last_error?.includes("прервана") &&
+        !autoRestartedRef.current
+      ) {
+        autoRestartedRef.current = true;
+        try {
+          await api(`/dashboard/sync?period=${period}`, { method: "POST" });
+          syncPollRef.current = setTimeout(loadSyncStatus, 2000);
+        } catch (_e) { /* silent */ }
       }
     } catch (_err) {
       // Silent — polling errors shouldn't block the UI
@@ -697,7 +708,7 @@ function Dashboard({ user, onLogout, onNavigate }) {
       )}
       {error && <div className="notice warning"><AlertTriangle size={18} /> {error}</div>}
       {syncMessage && <div className="notice info"><Activity size={16} /> {syncMessage}</div>}
-      <SyncProgressBanner syncStatus={syncStatus} />
+      <SyncProgressBanner syncStatus={syncStatus} onRestart={sync} />
 
       {loading ? <div className="loader">Загружаем показатели</div> : !products.length ? (
         <DashboardEmptyState data={data} onNavigate={onNavigate} onSync={sync} syncing={syncing} />
@@ -2009,7 +2020,7 @@ const SYNC_TYPE_LABELS = {
   auto_sync: "Автоматическая синхронизация",
 };
 
-function SyncProgressBanner({ syncStatus }) {
+function SyncProgressBanner({ syncStatus, onRestart }) {
   if (!syncStatus || syncStatus.status === "not_started") return null;
   const isActive = ["queued", "running", "partial"].includes(syncStatus.status);
   const isCompleted = syncStatus.status === "completed";
@@ -2058,8 +2069,17 @@ function SyncProgressBanner({ syncStatus }) {
           Синхронизация обычно занимает 2–5 минут. Можно закрыть страницу — синхронизация продолжится автоматически.
         </p>
       )}
-      {isFailed && syncStatus.last_error && (
-        <p className="sync-banner-hint sync-banner-hint--error">{syncStatus.last_error}</p>
+      {isFailed && (
+        <div className="sync-banner-failed-row">
+          {syncStatus.last_error && (
+            <p className="sync-banner-hint sync-banner-hint--error">{syncStatus.last_error}</p>
+          )}
+          {onRestart && (
+            <button className="btn-secondary btn-sm" onClick={onRestart}>
+              <RefreshCcw size={13} /> Перезапустить
+            </button>
+          )}
+        </div>
       )}
     </section>
   );

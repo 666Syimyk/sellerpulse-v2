@@ -1398,6 +1398,9 @@ tbody tr:hover td { background: rgba(22,119,255,.03); }
 .step-icon.dot { font-size: 14px; line-height: 1; color: var(--muted-soft); }
 .sync-banner-hint { font-size: 12.5px; color: var(--muted); margin: 0; line-height: 1.5; }
 .sync-banner-hint--error { color: #8b1f1c; }
+.sync-banner-failed-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sync-banner-failed-row .sync-banner-hint { flex: 1; }
+.btn-sm { padding: 4px 10px; font-size: 12px; gap: 4px; }
 
 /* ── Admin Panel ── */
 .admin-auth-panel {

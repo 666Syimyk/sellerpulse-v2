@@ -56,9 +56,9 @@ STEP_PROGRESS = {
     "dashboard_calc": 100,
 }
 
-# Retry delays in seconds: immediate, 30s, 2min, 10min
-RETRY_DELAYS = [0, 30, 120, 600]
-ACTIVE_JOB_TTL = timedelta(minutes=30)
+# Retry delays in seconds: immediate, 10s, 30s, 60s
+RETRY_DELAYS = [0, 10, 30, 60]
+ACTIVE_JOB_TTL = timedelta(minutes=90)
 settings = get_settings()
 
 
@@ -167,8 +167,36 @@ async def trigger_sync_now(job_id: int, user_id: int) -> None:
     await run_background_sync(job_id, user_id)
 
 
+async def resume_interrupted_jobs() -> None:
+    """On server start, reset any jobs stuck in 'running' state from a previous process."""
+    db = SessionLocal()
+    try:
+        stuck = db.scalars(
+            select(SyncJob).where(SyncJob.status.in_(["running", "partial"]))
+        ).all()
+        for job in stuck:
+            job.status = "queued"
+            job.last_error = None
+            if job.wb_token_id:
+                wb_token = db.get(WbToken, job.wb_token_id)
+                if wb_token:
+                    wb_token.sync_in_progress = False
+            for step in job.steps:
+                if step.status == "running":
+                    step.status = "pending"
+                    step.started_at = None
+        if stuck:
+            logger.info("Resumed %s interrupted sync jobs on startup", len(stuck))
+        db.commit()
+    except Exception as exc:
+        logger.exception("resume_interrupted_jobs failed: %s", exc)
+    finally:
+        db.close()
+
+
 async def run_sync_worker_loop() -> None:
     logger.info("Sync worker started, poll=%ss", settings.sync_worker_poll_seconds)
+    await resume_interrupted_jobs()
     while True:
         db = SessionLocal()
         try:
