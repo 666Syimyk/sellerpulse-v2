@@ -177,6 +177,7 @@ async def resume_interrupted_jobs() -> None:
         for job in stuck:
             job.status = "queued"
             job.last_error = None
+            job.started_at = None  # Reset so TTL clock restarts from now
             if job.wb_token_id:
                 wb_token = db.get(WbToken, job.wb_token_id)
                 if wb_token:
@@ -555,8 +556,10 @@ def _job_to_dict(db: Session, job: SyncJob) -> dict:
 def _expire_stale_job(db: Session, job: SyncJob) -> None:
     if job.status not in {"queued", "running", "partial"}:
         return
-    active_since = job.started_at or job.created_at
-    if not active_since or (_now() - active_since) <= ACTIVE_JOB_TTL:
+    # Use updated_at so actively-progressing jobs are never killed.
+    # updated_at refreshes on every _complete_step/_skip_step/_start_step commit.
+    last_activity = job.updated_at or job.started_at or job.created_at
+    if not last_activity or (_now() - last_activity) <= timedelta(minutes=15):
         return
 
     job.status = "failed"
