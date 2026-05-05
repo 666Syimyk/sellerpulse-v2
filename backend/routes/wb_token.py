@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.entities import User, WbToken
 from routes.deps import current_user
-from services.background_sync import create_sync_job
+from services.background_sync import create_sync_job, trigger_sync_now
 from services.sync import quick_bootstrap_wb_data
 from utils.security import decrypt_text, encrypt_text
 from wb_api.client import WbApiError, WbClient, WbInvalidToken, normalize_token
@@ -50,8 +51,9 @@ async def connect_token(
     bootstrap = await quick_bootstrap_wb_data(db, user.id, wb_token, token_text)
     db.refresh(wb_token)
 
-    # Start full background sync (runs after response is sent)
+    # Start full background sync immediately
     job = create_sync_job(db, user.id, wb_token.id, sync_type="initial_full_sync")
+    asyncio.create_task(trigger_sync_now(job.id, user.id))
 
     return _token_response(wb_token, bootstrap)
 

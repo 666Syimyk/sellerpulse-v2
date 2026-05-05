@@ -144,6 +144,29 @@ def claim_next_sync_job(db: Session) -> tuple[int, int] | None:
     return job.id, job.user_id
 
 
+async def trigger_sync_now(job_id: int, user_id: int) -> None:
+    """Immediately claim and run a queued sync job (called right after job creation)."""
+    db = SessionLocal()
+    try:
+        job = db.get(SyncJob, job_id)
+        if not job or job.status != "queued":
+            return
+        job.status = "running"
+        if not job.started_at:
+            job.started_at = _now()
+        if job.wb_token_id:
+            wb_token = db.get(WbToken, job.wb_token_id)
+            if wb_token:
+                wb_token.sync_in_progress = True
+        db.commit()
+    except Exception as exc:
+        logger.exception("trigger_sync_now failed to claim job=%s: %s", job_id, exc)
+        db.close()
+        return
+    db.close()
+    await run_background_sync(job_id, user_id)
+
+
 async def run_sync_worker_loop() -> None:
     logger.info("Sync worker started, poll=%ss", settings.sync_worker_poll_seconds)
     while True:
@@ -219,7 +242,9 @@ async def _execute_sync(db: Session, job_id: int, user_id: int) -> None:
     try:
         token_text = decrypt_text(wb_token.encrypted_token)
         client = WbClient(token_text, db=db, user_id=user_id, wb_token_id=wb_token.id)
-        date_from, date_to = period_dates("month")
+        # Sync from start of last month to today so both "month" and "last_month" periods have data
+        date_from, _ = period_dates("last_month")
+        _, date_to = period_dates("month")
 
         logger.info("Sync job %s starting user_id=%s type=%s", job_id, user_id, job.sync_type)
 
