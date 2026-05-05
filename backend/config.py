@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     trial_days: int = 14
     admin_secret: str = "change-admin-secret"
     enable_scheduler: bool = True
+    run_sync_worker_in_web: bool = True
     sync_worker_poll_seconds: int = 5
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")

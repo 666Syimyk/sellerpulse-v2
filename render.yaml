@@ -1,0 +1,65 @@
+services:
+  - name: sellerpulse-api
+    type: web
+    runtime: python
+    plan: starter
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sellerpulse-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: FRONTEND_ORIGIN
+        value: https://666syimyk.github.io
+      - key: ADMIN_SECRET
+        generateValue: true
+      - key: ENABLE_SCHEDULER
+        value: "true"
+      - key: RUN_SYNC_WORKER_IN_WEB
+        value: "false"
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+
+  - name: sellerpulse-worker
+    type: worker
+    runtime: python
+    plan: starter
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python worker.py
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sellerpulse-db
+          property: connectionString
+      - key: SECRET_KEY
+        fromService:
+          name: sellerpulse-api
+          type: web
+          envVarKey: SECRET_KEY
+      - key: FRONTEND_ORIGIN
+        value: https://666syimyk.github.io
+      - key: ADMIN_SECRET
+        fromService:
+          name: sellerpulse-api
+          type: web
+          envVarKey: ADMIN_SECRET
+      - key: ENABLE_SCHEDULER
+        value: "false"
+      - key: RUN_SYNC_WORKER_IN_WEB
+        value: "false"
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+
+databases:
+  - name: sellerpulse-db
+    plan: free
+    databaseName: sellerpulse
+    user: sellerpulse

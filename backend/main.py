@@ -31,11 +31,14 @@ run_sqlite_migrations()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    worker_task = asyncio.create_task(run_sync_worker_loop())
+    worker_task = None
+    if settings.run_sync_worker_in_web:
+        worker_task = asyncio.create_task(run_sync_worker_loop())
     if settings.enable_scheduler:
         start_scheduler()
     yield
-    worker_task.cancel()
+    if worker_task:
+        worker_task.cancel()
     if settings.enable_scheduler:
         stop_scheduler()
 
