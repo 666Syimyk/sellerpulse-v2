@@ -696,6 +696,7 @@ function DashboardEmptyState({ data, onNavigate, onSync, syncing }) {
 function CostPricePage({ user, onLogout, onNavigate }) {
   const [products, setProducts] = useState([]);
   const [costs, setCosts] = useState({});
+  const [taxes, setTaxes] = useState({});
   const [saving, setSaving] = useState({});
   const [savingAll, setSavingAll] = useState(false);
   const [message, setMessage] = useState("");
@@ -718,6 +719,11 @@ function CostPricePage({ user, onLogout, onNavigate }) {
           (result || []).map((p) => [p.nm_id, p.cost_price === null || p.cost_price === undefined ? "" : String(p.cost_price)])
         )
       );
+      setTaxes(
+        Object.fromEntries(
+          (result || []).map((p) => [p.nm_id, p.tax_rate === null || p.tax_rate === undefined ? "" : String(p.tax_rate)])
+        )
+      );
     } catch (err) {
       setError(err.message);
     } finally {
@@ -727,19 +733,28 @@ function CostPricePage({ user, onLogout, onNavigate }) {
 
   useEffect(() => { load().catch(console.error); }, []);
 
+  function parseTax(raw) {
+    if (raw === "" || raw === null || raw === undefined) return { ok: true, value: null };
+    const v = parseFloat(String(raw).replace(",", "."));
+    if (isNaN(v) || v < 0 || v > 100) return { ok: false, message: "Налог должен быть от 0 до 100" };
+    return { ok: true, value: v };
+  }
+
   async function save(product) {
     const parsed = parseCost(costs[product.nm_id]);
     if (!parsed.ok) { setError(parsed.message); return; }
+    const parsedTax = parseTax(taxes[product.nm_id]);
+    if (!parsedTax.ok) { setError(parsedTax.message); return; }
     setSaving((c) => ({ ...c, [product.nm_id]: true }));
     setError("");
     setMessage("");
     try {
       await api(`/products/${product.nm_id}/cost-price`, {
         method: "PATCH",
-        body: JSON.stringify({ cost_price: parsed.value, vendor_code: product.vendor_code, name: product.name }),
+        body: JSON.stringify({ cost_price: parsed.value, tax_rate: parsedTax.value, vendor_code: product.vendor_code, name: product.name }),
       });
-      setMessage(`Себестоимость ${product.vendor_code || product.nm_id} сохранена.`);
-      setProducts((prev) => prev.map((p) => p.nm_id === product.nm_id ? { ...p, cost_price: parsed.value } : p));
+      setMessage(`Сохранено: ${product.vendor_code || product.nm_id}.`);
+      setProducts((prev) => prev.map((p) => p.nm_id === product.nm_id ? { ...p, cost_price: parsed.value, tax_rate: parsedTax.value } : p));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -759,9 +774,10 @@ function CostPricePage({ user, onLogout, onNavigate }) {
     try {
       for (const product of changed) {
         const parsed = parseCost(costs[product.nm_id]);
+        const parsedTax = parseTax(taxes[product.nm_id]);
         await api(`/products/${product.nm_id}/cost-price`, {
           method: "PATCH",
-          body: JSON.stringify({ cost_price: parsed.value, vendor_code: product.vendor_code, name: product.name }),
+          body: JSON.stringify({ cost_price: parsed.value, tax_rate: parsedTax.ok ? parsedTax.value : undefined, vendor_code: product.vendor_code, name: product.name }),
         });
       }
       setMessage(`Сохранено товаров: ${changed.length}.`);
@@ -810,11 +826,13 @@ function CostPricePage({ user, onLogout, onNavigate }) {
 
   const changedProducts = useMemo(() => {
     return products.filter((p) => {
-      const current = normalizeCostValue(p.cost_price);
-      const next = normalizeCostInput(costs[p.nm_id]);
-      return current !== next;
+      const costChanged = normalizeCostValue(p.cost_price) !== normalizeCostInput(costs[p.nm_id]);
+      const currentTax = p.tax_rate === null || p.tax_rate === undefined ? "" : String(p.tax_rate);
+      const nextTax = taxes[p.nm_id] ?? "";
+      const taxChanged = currentTax !== nextTax;
+      return costChanged || taxChanged;
     });
-  }, [products, costs]);
+  }, [products, costs, taxes]);
 
   const noCostCount = products.filter((p) => p.cost_price === null || p.cost_price === undefined).length;
 
@@ -903,6 +921,7 @@ function CostPricePage({ user, onLogout, onNavigate }) {
                   <th>Название товара</th>
                   <th>Текущая себестоимость</th>
                   <th>Новая себестоимость</th>
+                  <th title="Налог % для расчёта прибыли на главной (например: 6 для УСН 6%)">Налог % ℹ</th>
                   <th>Обновлено</th>
                   <th>Действие</th>
                 </tr>
@@ -932,6 +951,19 @@ function CostPricePage({ user, onLogout, onNavigate }) {
                           onChange={(e) => setCosts((c) => ({ ...c, [product.nm_id]: e.target.value }))}
                         />
                       </td>
+                      <td>
+                        <input
+                          className="cost-input tax-input"
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.1"
+                          placeholder="напр. 6"
+                          value={taxes[product.nm_id] ?? ""}
+                          onChange={(e) => setTaxes((t) => ({ ...t, [product.nm_id]: e.target.value }))}
+                        />
+                        {taxes[product.nm_id] ? <small className="tax-hint">%</small> : null}
+                      </td>
                       <td className="cost-date">{product.updated_at ? product.updated_at.slice(0, 10) : "—"}</td>
                       <td>
                         <button
@@ -947,7 +979,7 @@ function CostPricePage({ user, onLogout, onNavigate }) {
                   );
                 })}
                 {!filteredProducts.length && (
-                  <tr><td colSpan="7" className="empty">
+                  <tr><td colSpan="8" className="empty">
                     {products.length ? "По запросу ничего не найдено." : "Загрузите финансовый отчёт WB или синхронизируйте токен — товары появятся здесь."}
                   </td></tr>
                 )}

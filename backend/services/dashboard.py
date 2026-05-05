@@ -116,6 +116,13 @@ def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
         missing_expense_fields = [field for field in WB_REQUIRED_FOR_EXACT_PROFIT if expense_values[field] is None]
         has_missing_wb_expense = bool(missing_expense_fields) or not has_finance_rows
 
+        # Apply manual tax_rate when WB hasn't sent tax data yet
+        if expense_values.get("tax") is None and product and getattr(product, "tax_rate", None):
+            expense_values = dict(expense_values)
+            expense_values["tax"] = (after_spp or 0) * product.tax_rate / 100
+            missing_expense_fields = [f for f in missing_expense_fields if f != "tax"]
+            has_missing_wb_expense = bool(missing_expense_fields) or not has_finance_rows
+
         profit = None
         if after_spp is not None and cost_price_total is not None and not has_missing_wb_expense:
             profit = after_spp - cost_price_total - sum((expense_values[field] or 0) for field in EXPENSE_FIELDS)
@@ -140,6 +147,7 @@ def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
             "category": product.category if product else None,
             "nm_id": nm_id,
             "unit_cost_price": _money(product.cost_price) if product else None,
+            "tax_rate": product.tax_rate if product else None,
             "sold_qty": shown_sold_qty,
             "orders_qty": orders_qty,
             "buyout_percent": buyout_percent,

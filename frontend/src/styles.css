@@ -989,6 +989,8 @@ tbody tr:hover td { background: rgba(22,119,255,.03); }
 .cost-toolbar-meta { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
 .cost-toolbar span, .cost-toolbar-meta span { color: var(--muted); font-size: 13px; font-weight: 700; }
 .cost-input { width: 150px; padding: 8px 10px; }
+.tax-input { width: 70px !important; }
+.tax-hint { color: var(--muted); font-size: 11px; margin-left: 3px; vertical-align: middle; }
 
 /* ── Financial report ── */
 .report-upload-grid {

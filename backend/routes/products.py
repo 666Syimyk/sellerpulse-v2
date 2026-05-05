@@ -16,6 +16,7 @@ router = APIRouter(prefix="/products", tags=["products"])
 
 class CostPriceIn(BaseModel):
     cost_price: float | None
+    tax_rate: float | None = None
     vendor_code: str = ""
     name: str = ""
 
@@ -78,6 +79,7 @@ def list_products(user: User = Depends(current_user), db: Session = Depends(get_
             "vendor_code": p.vendor_code or "",
             "name": p.name or "",
             "cost_price": p.cost_price,
+            "tax_rate": p.tax_rate,
             "updated_at": p.updated_at.isoformat() if p.updated_at else None,
         })
     return result
@@ -104,6 +106,8 @@ def update_cost_price(nm_id: int, payload: CostPriceIn, user: User = Depends(cur
 
     _record_history(db, user.id, product, payload.cost_price)
     product.cost_price = payload.cost_price
+    if payload.tax_rate is not None:
+        product.tax_rate = payload.tax_rate
     if payload.vendor_code and not product.vendor_code:
         product.vendor_code = payload.vendor_code
     if payload.name and not product.name:
@@ -117,6 +121,7 @@ def update_cost_price(nm_id: int, payload: CostPriceIn, user: User = Depends(cur
         "vendor_code": product.vendor_code,
         "name": product.name,
         "cost_price": product.cost_price,
+        "tax_rate": product.tax_rate,
         "updated_at": product.updated_at.isoformat() if product.updated_at else None,
     }
 

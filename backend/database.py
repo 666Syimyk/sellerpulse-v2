@@ -40,7 +40,14 @@ def get_db():
 
 
 def run_sqlite_migrations() -> None:
+    # PostgreSQL: safely add any missing columns
     if not database_url.startswith("sqlite"):
+        with engine.begin() as connection:
+            for col_def in ["tax_rate FLOAT"]:
+                try:
+                    connection.execute(text(f"ALTER TABLE products ADD COLUMN IF NOT EXISTS {col_def}"))
+                except Exception:
+                    pass
         return
 
     with engine.begin() as connection:
@@ -94,6 +101,7 @@ def run_sqlite_migrations() -> None:
         if "products" in tables:
             add_column("products", "brand VARCHAR(255)")
             add_column("products", "category VARCHAR(255)")
+            add_column("products", "tax_rate FLOAT")
 
         if "expenses" in tables:
             add_column("expenses", "returns_qty INTEGER")
