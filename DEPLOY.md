@@ -2,16 +2,16 @@
 
 ## GitHub Pages
 
-The frontend is published from `main:/docs`.
+The frontend is published from `master:/docs`.
 
 After the backend gets a public URL, rebuild `docs` with:
 
 ```powershell
-$env:VITE_API_URL="https://your-backend.onrender.com"
+$env:VITE_API_URL="https://sellerpulse-api.onrender.com"
 .\scripts\publish-pages.ps1
 git add docs
 git commit -m "Update Pages build with production API"
-git push origin main master
+git push origin master
 ```
 
 ## Render

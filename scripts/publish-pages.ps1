@@ -10,8 +10,10 @@ $docs = Join-Path $root "docs"
 
 Push-Location $frontend
 try {
+  $env:VITE_BASE = "./"
   npm.cmd run build:pages
 } finally {
+  Remove-Item Env:\VITE_BASE -ErrorAction SilentlyContinue
   Pop-Location
 }
 
