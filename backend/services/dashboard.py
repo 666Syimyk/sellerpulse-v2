@@ -212,6 +212,7 @@ def calculate_dashboard(db: Session, user_id: int, period: str) -> dict:
         "today_hint": period == "today",
         "metrics": {
             "sold_qty": None if sales_data_missing else sum(totals["sold_qty"]),
+            "orders_qty": orders_qty_total or None,
             "sales_sum": _money(_sum_nullable(totals["before_spp"])),
             "after_spp": _money(after_spp_total),
             "net_profit": _money(profit_total),
@@ -481,6 +482,8 @@ def _product_status(product, profit, after_spp, stock_qty, days_left, has_missin
         return "Минус с каждой продажи", "Срочно проверить цену"
     if profit is not None and profit < 0:
         return "В минусе", "Проверить цену и расходы"
+    if days_left is not None and days_left <= 7:
+        return "Заканчивается остаток", "Пополнить остаток"
     margin = _percent(profit, after_spp)
     if margin is not None and margin < 15:
         return "Низкая маржа", "Поднять цену"

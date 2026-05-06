@@ -6,7 +6,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from config import get_settings
@@ -56,15 +56,24 @@ STEP_PROGRESS = {
     "dashboard_calc": 100,
 }
 
-# Retry delays in seconds: immediate, 10s, 30s, 60s
-RETRY_DELAYS = [0, 10, 30, 60]
+# WB can keep statistics/finance endpoints rate-limited for several minutes.
+RETRY_DELAYS = [0, 60, 120, 240, 300]
 ACTIVE_JOB_TTL = timedelta(minutes=90)
 settings = get_settings()
+RETRY_ALWAYS_STEPS = {"token_check", "dashboard_calc"}
+REQUIRED_DATA_STEPS = {"stocks", "sales", "orders", "finance_reports", "advertising"}
+RETRYABLE_STEP_STATUSES = {"skipped", "failed"}
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
 
-def create_sync_job(db: Session, user_id: int, wb_token_id: int | None, sync_type: str = "manual_sync") -> SyncJob:
+def create_sync_job(
+    db: Session,
+    user_id: int,
+    wb_token_id: int | None,
+    sync_type: str = "manual_sync",
+    retry_from: SyncJob | None = None,
+) -> SyncJob:
     """Create a new SyncJob and cancel any stale queued/running jobs."""
     if sync_type == "auto_sync":
         active_job = db.scalar(
@@ -72,7 +81,10 @@ def create_sync_job(db: Session, user_id: int, wb_token_id: int | None, sync_typ
             .where(
                 SyncJob.user_id == user_id,
                 SyncJob.wb_token_id == wb_token_id,
-                SyncJob.status.in_(["queued", "running", "partial"]),
+                or_(
+                    SyncJob.status.in_(["queued", "running"]),
+                    (SyncJob.status == "partial") & SyncJob.finished_at.is_(None),
+                ),
             )
             .order_by(SyncJob.id.desc())
         )
@@ -106,12 +118,51 @@ def create_sync_job(db: Session, user_id: int, wb_token_id: int | None, sync_typ
         if wb_token:
             wb_token.sync_in_progress = True
 
+    retry_steps = {
+        step.step_name: step
+        for step in (retry_from.steps if retry_from else [])
+        if step.status == "completed" and step.step_name not in RETRY_ALWAYS_STEPS
+    }
+    initial_progress = 0
     for step_name in STEP_NAMES:
-        db.add(SyncStep(sync_job_id=job.id, step_name=step_name, status="pending"))
+        previous = retry_steps.get(step_name)
+        if previous:
+            initial_progress = max(initial_progress, STEP_PROGRESS.get(step_name, 0))
+        db.add(SyncStep(
+            sync_job_id=job.id,
+            step_name=step_name,
+            status="completed" if previous else "pending",
+            records_received=previous.records_received if previous else None,
+            records_saved=previous.records_saved if previous else None,
+            started_at=previous.started_at if previous else None,
+            finished_at=previous.finished_at if previous else None,
+        ))
+
+    if initial_progress:
+        job.progress_percent = initial_progress
 
     db.commit()
     db.refresh(job)
     return job
+
+
+def find_retryable_sync_job(db: Session, user_id: int, wb_token_id: int | None) -> SyncJob | None:
+    """Return the latest completed partial/failed job with required WB data steps to retry."""
+    jobs = db.scalars(
+        select(SyncJob)
+        .where(
+            SyncJob.user_id == user_id,
+            SyncJob.wb_token_id == wb_token_id,
+            SyncJob.status.in_(["partial", "failed"]),
+            SyncJob.finished_at.is_not(None),
+        )
+        .order_by(SyncJob.id.desc())
+        .limit(10)
+    ).all()
+    for job in jobs:
+        if _has_retryable_required_steps(job):
+            return job
+    return None
 
 
 def get_latest_sync_status(db: Session, user_id: int) -> dict | None:
@@ -120,6 +171,8 @@ def get_latest_sync_status(db: Session, user_id: int) -> dict | None:
     )
     if not job:
         return None
+    if job.status in {"queued", "running", "partial"} and job.finished_at:
+        _finalize_finished_job(db, job)
     _expire_stale_job(db, job)
     return _job_to_dict(db, job)
 
@@ -171,8 +224,22 @@ async def resume_interrupted_jobs() -> None:
     """On server start, reset any jobs stuck in 'running' state from a previous process."""
     db = SessionLocal()
     try:
+        repaired = db.scalars(
+            select(SyncJob).where(
+                SyncJob.status.in_(["queued", "running", "partial"]),
+                SyncJob.finished_at.is_not(None),
+            )
+        ).all()
+        for job in repaired:
+            _finalize_finished_job(db, job)
+
         stuck = db.scalars(
-            select(SyncJob).where(SyncJob.status.in_(["running", "partial"]))
+            select(SyncJob).where(
+                or_(
+                    SyncJob.status == "running",
+                    (SyncJob.status == "partial") & SyncJob.finished_at.is_(None),
+                )
+            )
         ).all()
         for job in stuck:
             job.status = "queued"
@@ -186,6 +253,8 @@ async def resume_interrupted_jobs() -> None:
                 if step.status == "running":
                     step.status = "pending"
                     step.started_at = None
+        if repaired:
+            logger.info("Repaired %s finished sync jobs with active status on startup", len(repaired))
         if stuck:
             logger.info("Resumed %s interrupted sync jobs on startup", len(stuck))
         db.commit()
@@ -257,7 +326,7 @@ async def _execute_sync(db: Session, job_id: int, user_id: int) -> None:
 
     wb_token = _active_token(db, user_id)
     if not wb_token:
-        _fail_job(db, job, "WB API-токен не подключён")
+        _fail_job(db, job, "WB API-\u0442\u043e\u043a\u0435\u043d \u043d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d")
         if job.wb_token_id:
             token_for_job = db.get(WbToken, job.wb_token_id)
             if token_for_job:
@@ -271,112 +340,109 @@ async def _execute_sync(db: Session, job_id: int, user_id: int) -> None:
     try:
         token_text = decrypt_text(wb_token.encrypted_token)
         client = WbClient(token_text, db=db, user_id=user_id, wb_token_id=wb_token.id)
-        # Sync from start of last month to today so both "month" and "last_month" periods have data
         date_from, _ = period_dates("last_month")
         _, date_to = period_dates("month")
 
         logger.info("Sync job %s starting user_id=%s type=%s", job_id, user_id, job.sync_type)
 
-        # ── token_check ──────────────────────────────────────────────────────────
         step = _get_step(db, job_id, "token_check")
-        _start_step(db, job, step)
-        if wb_token.token_status == "invalid":
-            _fail_step(db, step, "Токен WB недействителен")
-            _fail_job(db, job, "Токен WB недействителен")
-            return
-        _complete_step(db, job, step, progress=STEP_PROGRESS["token_check"])
-
-        # ── products ─────────────────────────────────────────────────────────────
-        step = _get_step(db, job_id, "products")
-        _start_step(db, job, step)
-        products_rows, status, error = await _fetch_with_retry(client.fetch_products)
-        if products_rows is not None:
-            saved = _save_products(db, user_id, wb_token.id, products_rows)
-            db.commit()
-            _complete_step(db, job, step, received=len(products_rows), saved=saved, progress=STEP_PROGRESS["products"])
-        else:
-            _skip_step(db, job, step, error, progress=STEP_PROGRESS["products"])
-            if status == "invalid":
-                _update_token_status(db, wb_token, "invalid")
-                _fail_job(db, job, error)
+        if step.status != "completed":
+            _start_step(db, job, step)
+            if wb_token.token_status == "invalid":
+                _fail_step(db, step, "\u0422\u043e\u043a\u0435\u043d WB \u043d\u0435\u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0442\u0435\u043b\u0435\u043d")
+                _fail_job(db, job, "\u0422\u043e\u043a\u0435\u043d WB \u043d\u0435\u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0442\u0435\u043b\u0435\u043d")
                 return
-            _update_token_status(db, wb_token, status)
+            _complete_step(db, job, step, progress=STEP_PROGRESS["token_check"])
 
-        # ── stocks ───────────────────────────────────────────────────────────────
+        step = _get_step(db, job_id, "products")
+        if step.status != "completed":
+            _start_step(db, job, step)
+            products_rows, status, error = await _fetch_with_retry(client.fetch_products)
+            if products_rows is not None:
+                saved = _save_products(db, user_id, wb_token.id, products_rows)
+                db.commit()
+                _complete_step(db, job, step, received=len(products_rows), saved=saved, progress=STEP_PROGRESS["products"])
+            else:
+                _skip_step(db, job, step, error, progress=STEP_PROGRESS["products"])
+                if status == "invalid":
+                    _update_token_status(db, wb_token, "invalid")
+                    _fail_job(db, job, error)
+                    return
+                _update_token_status(db, wb_token, status)
+
         step = _get_step(db, job_id, "stocks")
-        _start_step(db, job, step)
-        stocks_rows, status, error = await _fetch_with_retry(client.fetch_stocks)
-        if stocks_rows is not None:
-            _clear_stocks(db, user_id, wb_token.id)
-            saved = _save_stocks(db, user_id, wb_token.id, stocks_rows)
-            db.commit()
-            _complete_step(db, job, step, received=len(stocks_rows), saved=saved, progress=STEP_PROGRESS["stocks"])
-        else:
-            _skip_step(db, job, step, error, progress=STEP_PROGRESS["stocks"])
+        if step.status != "completed":
+            _start_step(db, job, step)
+            stocks_rows, status, error = await _fetch_with_retry(client.fetch_stocks)
+            if stocks_rows is not None:
+                _clear_stocks(db, user_id, wb_token.id)
+                saved = _save_stocks(db, user_id, wb_token.id, stocks_rows)
+                db.commit()
+                _complete_step(db, job, step, received=len(stocks_rows), saved=saved, progress=STEP_PROGRESS["stocks"])
+            else:
+                _skip_step(db, job, step, error, progress=STEP_PROGRESS["stocks"])
 
-        # Mark as partial — we have products + stocks now
         if job.status == "running":
             job.status = "partial"
             db.commit()
 
-        # ── sales ────────────────────────────────────────────────────────────────
         step = _get_step(db, job_id, "sales")
-        _start_step(db, job, step)
-        sales_rows, _status, error = await _fetch_with_retry(lambda: client.fetch_sales(date_from, date_to))
-        if sales_rows is not None:
-            sales_date_to = _max_row_date(sales_rows, ("date", "sale_dt", "saleDt")) or date_to
-            eff_to = max(date_to, sales_date_to)
-            _clear_sales(db, user_id, wb_token.id, date_from, eff_to)
-            saved = _save_sales(db, user_id, wb_token.id, sales_rows, date_from, eff_to)
-            db.commit()
-            _complete_step(db, job, step, received=len(sales_rows), saved=saved, progress=STEP_PROGRESS["sales"])
-        else:
-            _skip_step(db, job, step, error, progress=STEP_PROGRESS["sales"])
+        if step.status != "completed":
+            _start_step(db, job, step)
+            sales_rows, _status, error = await _fetch_with_retry(lambda: client.fetch_sales(date_from, date_to))
+            if sales_rows is not None:
+                sales_date_to = _max_row_date(sales_rows, ("date", "sale_dt", "saleDt")) or date_to
+                eff_to = max(date_to, sales_date_to)
+                _clear_sales(db, user_id, wb_token.id, date_from, eff_to)
+                saved = _save_sales(db, user_id, wb_token.id, sales_rows, date_from, eff_to)
+                db.commit()
+                _complete_step(db, job, step, received=len(sales_rows), saved=saved, progress=STEP_PROGRESS["sales"])
+            else:
+                _skip_step(db, job, step, error, progress=STEP_PROGRESS["sales"])
 
-        # ── orders ───────────────────────────────────────────────────────────────
         step = _get_step(db, job_id, "orders")
-        _start_step(db, job, step)
-        orders_rows, _status, error = await _fetch_with_retry(lambda: client.fetch_orders(date_from, date_to))
-        if orders_rows is not None:
-            orders_date_to = _max_row_date(orders_rows, ("date", "order_dt", "orderDt")) or date_to
-            eff_to = max(date_to, orders_date_to)
-            _clear_orders(db, user_id, wb_token.id, date_from, eff_to)
-            saved = _save_orders(db, user_id, wb_token.id, orders_rows, date_from, eff_to)
-            db.commit()
-            _complete_step(db, job, step, received=len(orders_rows), saved=saved, progress=STEP_PROGRESS["orders"])
-        else:
-            _skip_step(db, job, step, error, progress=STEP_PROGRESS["orders"])
+        if step.status != "completed":
+            _start_step(db, job, step)
+            orders_rows, _status, error = await _fetch_with_retry(lambda: client.fetch_orders(date_from, date_to))
+            if orders_rows is not None:
+                orders_date_to = _max_row_date(orders_rows, ("date", "order_dt", "orderDt")) or date_to
+                eff_to = max(date_to, orders_date_to)
+                _clear_orders(db, user_id, wb_token.id, date_from, eff_to)
+                saved = _save_orders(db, user_id, wb_token.id, orders_rows, date_from, eff_to)
+                db.commit()
+                _complete_step(db, job, step, received=len(orders_rows), saved=saved, progress=STEP_PROGRESS["orders"])
+            else:
+                _skip_step(db, job, step, error, progress=STEP_PROGRESS["orders"])
 
-        # ── finance_reports ──────────────────────────────────────────────────────
-        step = _get_step(db, job_id, "finance_reports")
-        _start_step(db, job, step)
         preserved: dict = {}
-        finance_rows, _status, error = await _fetch_with_retry(lambda: client.fetch_financial_report(date_from, date_to))
-        if finance_rows is not None:
-            preserved = _preserve_expense_fields(db, user_id, wb_token.id, date_from, date_to, ("advertising", "tax"))
-            _clear_expenses(db, user_id, wb_token.id, date_from, date_to)
-            saved = _save_financial_report(db, user_id, wb_token.id, finance_rows, date_from, date_to)
-            sales_step = _get_step(db, job_id, "sales")
-            if (sales_step.records_saved or 0) == 0:
-                _clear_sales(db, user_id, wb_token.id, date_from, date_to)
-                _save_sales_from_financial_report(db, user_id, wb_token.id, finance_rows, date_from, date_to)
-            db.commit()
-            _complete_step(db, job, step, received=len(finance_rows), saved=saved, progress=STEP_PROGRESS["finance_reports"])
-        else:
-            _skip_step(db, job, step, error, progress=STEP_PROGRESS["finance_reports"])
+        step = _get_step(db, job_id, "finance_reports")
+        if step.status != "completed":
+            _start_step(db, job, step)
+            finance_rows, _status, error = await _fetch_with_retry(lambda: client.fetch_financial_report(date_from, date_to))
+            if finance_rows is not None:
+                preserved = _preserve_expense_fields(db, user_id, wb_token.id, date_from, date_to, ("advertising", "tax"))
+                _clear_expenses(db, user_id, wb_token.id, date_from, date_to)
+                saved = _save_financial_report(db, user_id, wb_token.id, finance_rows, date_from, date_to)
+                sales_step = _get_step(db, job_id, "sales")
+                if (sales_step.records_saved or 0) == 0:
+                    _clear_sales(db, user_id, wb_token.id, date_from, date_to)
+                    _save_sales_from_financial_report(db, user_id, wb_token.id, finance_rows, date_from, date_to)
+                db.commit()
+                _complete_step(db, job, step, received=len(finance_rows), saved=saved, progress=STEP_PROGRESS["finance_reports"])
+            else:
+                _skip_step(db, job, step, error, progress=STEP_PROGRESS["finance_reports"])
 
-        # ── advertising ──────────────────────────────────────────────────────────
         step = _get_step(db, job_id, "advertising")
-        _start_step(db, job, step)
-        adv_rows, _status, error = await _fetch_with_retry(lambda: client.fetch_advertising(date_from, date_to))
-        if adv_rows is not None:
-            saved = _save_advertising(db, user_id, wb_token.id, adv_rows, date_from, date_to)
-            db.commit()
-            _complete_step(db, job, step, received=len(adv_rows), saved=saved, progress=STEP_PROGRESS["advertising"])
-        else:
-            _skip_step(db, job, step, error, progress=STEP_PROGRESS["advertising"])
+        if step.status != "completed":
+            _start_step(db, job, step)
+            adv_rows, _status, error = await _fetch_with_retry(lambda: client.fetch_advertising(date_from, date_to))
+            if adv_rows is not None:
+                saved = _save_advertising(db, user_id, wb_token.id, adv_rows, date_from, date_to)
+                db.commit()
+                _complete_step(db, job, step, received=len(adv_rows), saved=saved, progress=STEP_PROGRESS["advertising"])
+            else:
+                _skip_step(db, job, step, error, progress=STEP_PROGRESS["advertising"])
 
-        # Restore preserved expense fields (tax always; advertising if adv step failed)
         if preserved:
             restore_fields = ["tax"]
             adv_step = _get_step(db, job_id, "advertising")
@@ -388,19 +454,18 @@ async def _execute_sync(db: Session, job_id: int, user_id: int) -> None:
         wb_token.last_sync_at = _now()
         db.commit()
 
-        # ── dashboard_calc ───────────────────────────────────────────────────────
         step = _get_step(db, job_id, "dashboard_calc")
-        _start_step(db, job, step)
-        try:
-            from services.dashboard import calculate_dashboard
-            for p in ("today", "week", "month", "last_month"):
-                calculate_dashboard(db, user_id, p)
-            _complete_step(db, job, step, progress=STEP_PROGRESS["dashboard_calc"])
-        except Exception as exc:
-            _skip_step(db, job, step, str(exc)[:512], progress=STEP_PROGRESS["dashboard_calc"])
-            logger.warning("Dashboard calc failed in sync job %s: %s", job_id, exc)
+        if step.status != "completed":
+            _start_step(db, job, step)
+            try:
+                from services.dashboard import calculate_dashboard
+                for p in ("today", "week", "month", "last_month"):
+                    calculate_dashboard(db, user_id, p)
+                _complete_step(db, job, step, progress=STEP_PROGRESS["dashboard_calc"])
+            except Exception as exc:
+                _skip_step(db, job, step, str(exc)[:512], progress=STEP_PROGRESS["dashboard_calc"])
+                logger.warning("Dashboard calc failed in sync job %s: %s", job_id, exc)
 
-        # ── Finalise job status ───────────────────────────────────────────────────
         db.refresh(job)
         failed_critical = any(s.step_name == "token_check" and s.status == "failed" for s in job.steps)
         if failed_critical:
@@ -409,6 +474,7 @@ async def _execute_sync(db: Session, job_id: int, user_id: int) -> None:
             completed_count = sum(1 for s in job.steps if s.status == "completed")
             job.status = "completed" if completed_count == len(job.steps) else "partial"
         job.finished_at = _now()
+        job.progress_percent = _effective_progress(job, list(job.steps))
         db.commit()
 
         logger.info(
@@ -420,7 +486,7 @@ async def _execute_sync(db: Session, job_id: int, user_id: int) -> None:
         db.commit()
 
 
-# ─── Retry wrapper ────────────────────────────────────────────────────────────
+# Retry wrapper ────────────────────────────────────────────────────────────
 
 async def _fetch_with_retry(fetcher) -> tuple[list | None, str, str]:
     """
@@ -473,7 +539,7 @@ def _complete_step(
     step.finished_at = _now()
     step.records_received = received
     step.records_saved = saved
-    job.progress_percent = progress
+    job.progress_percent = max(job.progress_percent or 0, progress)
     db.commit()
 
 
@@ -481,7 +547,7 @@ def _skip_step(db: Session, job: SyncJob, step: SyncStep, error: str | None, pro
     step.status = "skipped"
     step.finished_at = _now()
     step.error_message = (error or "")[:1024]
-    job.progress_percent = progress
+    job.progress_percent = max(job.progress_percent or 0, progress)
     db.commit()
 
 
@@ -526,13 +592,46 @@ def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _effective_progress(job: SyncJob, steps: list[SyncStep]) -> int:
+    if job.status == "completed":
+        return 100
+    if job.status == "partial" and job.finished_at:
+        completed = sum(1 for step in steps if step.status == "completed")
+        total = len(steps) or 1
+        return max(1, min(99, round(completed * 100 / total)))
+    return job.progress_percent or 0
+
+
+def _has_retryable_required_steps(job: SyncJob) -> bool:
+    return any(
+        step.step_name in REQUIRED_DATA_STEPS and step.status in RETRYABLE_STEP_STATUSES
+        for step in job.steps
+    )
+
+
+def _finalize_finished_job(db: Session, job: SyncJob) -> None:
+    steps = list(job.steps)
+    failed_critical = any(step.step_name == "token_check" and step.status == "failed" for step in steps)
+    if failed_critical:
+        job.status = "failed"
+    else:
+        completed_count = sum(1 for step in steps if step.status == "completed")
+        job.status = "completed" if completed_count == len(steps) else "partial"
+    job.progress_percent = _effective_progress(job, steps)
+    if job.wb_token_id:
+        wb_token = db.get(WbToken, job.wb_token_id)
+        if wb_token:
+            wb_token.sync_in_progress = False
+    db.commit()
+
+
 def _job_to_dict(db: Session, job: SyncJob) -> dict:
     steps = sorted(job.steps, key=lambda s: s.id)
     return {
         "job_id": job.id,
         "status": job.status,
         "sync_type": job.sync_type,
-        "progress_percent": job.progress_percent,
+        "progress_percent": _effective_progress(job, steps),
         "current_step": job.current_step,
         "started_at": job.started_at.isoformat() if job.started_at else None,
         "finished_at": job.finished_at.isoformat() if job.finished_at else None,
@@ -555,6 +654,8 @@ def _job_to_dict(db: Session, job: SyncJob) -> dict:
 
 def _expire_stale_job(db: Session, job: SyncJob) -> None:
     if job.status not in {"queued", "running", "partial"}:
+        return
+    if job.status == "partial" and job.finished_at:
         return
     # Use updated_at so actively-progressing jobs are never killed.
     # updated_at refreshes on every _complete_step/_skip_step/_start_step commit.

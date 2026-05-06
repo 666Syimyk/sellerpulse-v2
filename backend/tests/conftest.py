@@ -17,8 +17,7 @@ def _clear_rate_limit_buckets():
     node = app.middleware_stack
     while node is not None:
         if isinstance(node, RateLimitMiddleware):
-            with node._lock:
-                node._buckets.clear()
+            node._buckets.clear()
             return
         node = getattr(node, "app", None)
 

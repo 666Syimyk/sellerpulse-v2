@@ -448,6 +448,8 @@ function TokenPage({ user, onConnected, onLogout, onNavigate }) {
 }
 
 const DASHBOARD_PERIOD = "today";
+const REQUIRED_SYNC_STEP_NAMES = new Set(["stocks", "sales", "orders", "finance_reports", "advertising"]);
+const MAX_AUTO_SYNC_RETRIES = 3;
 
 function Dashboard({ user, onLogout, onNavigate }) {
   const [data, setData] = useState(null);
@@ -462,6 +464,8 @@ function Dashboard({ user, onLogout, onNavigate }) {
   const syncPollRef = useRef(null);
   const dashboardReloadedRef = useRef(false);
   const autoRestartedRef = useRef(false);
+  const autoRetriedJobsRef = useRef(new Set());
+  const autoRetryAttemptsRef = useRef(0);
 
   async function load() {
     setLoading(true);
@@ -480,23 +484,47 @@ function Dashboard({ user, onLogout, onNavigate }) {
     try {
       const result = await api("/sync/status");
       setSyncStatus(result);
-      const active = result.status === "queued" || result.status === "running" || result.status === "partial";
+      const active = result.status === "queued" || result.status === "running" || (result.status === "partial" && !result.finished_at);
+      const hasRequiredWarnings = (result.steps || []).some(
+        (step) => REQUIRED_SYNC_STEP_NAMES.has(step.step_name) && (step.status === "skipped" || step.status === "failed")
+      );
       if (active) {
         dashboardReloadedRef.current = false;
         syncPollRef.current = setTimeout(loadSyncStatus, 3000);
-      } else if (result.status === "completed" && !dashboardReloadedRef.current) {
-        dashboardReloadedRef.current = true;
-        load().catch(console.error);
-      } else if (
-        result.status === "failed" &&
-        result.last_error?.includes("прервана") &&
-        !autoRestartedRef.current
-      ) {
-        autoRestartedRef.current = true;
-        try {
-          await api(`/dashboard/sync?period=${DASHBOARD_PERIOD}`, { method: "POST" });
-          syncPollRef.current = setTimeout(loadSyncStatus, 2000);
-        } catch (_e) { /* silent */ }
+      } else {
+        if ((result.status === "completed" || result.status === "partial") && !dashboardReloadedRef.current) {
+          dashboardReloadedRef.current = true;
+          load().catch(console.error);
+        }
+        if (result.status === "completed") {
+          autoRetryAttemptsRef.current = 0;
+          autoRetriedJobsRef.current.clear();
+        } else if (
+          (result.status === "partial" || result.status === "failed") &&
+          result.finished_at &&
+          hasRequiredWarnings &&
+          !autoRetriedJobsRef.current.has(result.job_id) &&
+          autoRetryAttemptsRef.current < MAX_AUTO_SYNC_RETRIES
+        ) {
+          autoRetriedJobsRef.current.add(result.job_id);
+          autoRetryAttemptsRef.current += 1;
+          try {
+            const retry = await api(`/dashboard/sync?period=${DASHBOARD_PERIOD}`, { method: "POST" });
+            setSyncMessage(retry.message || "Запущена автодогрузка данных WB.");
+            if (retry.sync_status) setSyncStatus(retry.sync_status);
+            syncPollRef.current = setTimeout(loadSyncStatus, 2000);
+          } catch (_e) { /* silent */ }
+        } else if (
+          result.status === "failed" &&
+          result.last_error?.includes("прервана") &&
+          !autoRestartedRef.current
+        ) {
+          autoRestartedRef.current = true;
+          try {
+            await api(`/dashboard/sync?period=${DASHBOARD_PERIOD}`, { method: "POST" });
+            syncPollRef.current = setTimeout(loadSyncStatus, 2000);
+          } catch (_e) { /* silent */ }
+        }
       }
     } catch (_err) {
       // Silent — polling errors shouldn't block the UI
@@ -534,6 +562,8 @@ function Dashboard({ user, onLogout, onNavigate }) {
   async function sync() {
     setSyncing(true);
     setError("");
+    autoRetryAttemptsRef.current = 0;
+    autoRetriedJobsRef.current.clear();
     clearTimeout(syncPollRef.current);
     try {
       const result = await api(`/dashboard/sync?period=${DASHBOARD_PERIOD}`, { method: "POST" });
@@ -670,6 +700,8 @@ function Dashboard({ user, onLogout, onNavigate }) {
 
 function DashboardEmptyState({ data, onNavigate, onSync, syncing }) {
   const hasToken = data?.shop?.token_status && data.shop.token_status !== "invalid";
+  const todayOrdersQty = data?.metrics?.orders_qty ?? 0;
+  const hasTodayOrders = todayOrdersQty > 0;
   return (
     <section className="panel empty-dashboard">
       <div className="empty-dashboard-icon"><ShoppingCart size={30} /></div>
@@ -678,7 +710,9 @@ function DashboardEmptyState({ data, onNavigate, onSync, syncing }) {
         <h2>Сегодня продаж пока нет</h2>
         <p>
           {hasToken
-            ? "Синхронизируйте данные WB, чтобы увидеть сегодняшние продажи. Если продаж ещё не было — таблица появится после первой продажи."
+            ? hasTodayOrders
+              ? `Сегодня уже есть заказы (${number(todayOrdersQty)}), но продажи WB за сегодня ещё не получены. Они появятся после очередной синхронизации WB API.`
+              : "Синхронизируйте данные WB, чтобы увидеть сегодняшние продажи. Если продаж ещё не было — таблица появится после первой продажи."
             : "Подключите WB API-токен, чтобы получать данные о продажах и расходах WB."}
         </p>
         <div className="actions">
@@ -696,7 +730,9 @@ function DashboardEmptyState({ data, onNavigate, onSync, syncing }) {
 function CostPricePage({ user, onLogout, onNavigate }) {
   const [products, setProducts] = useState([]);
   const [costs, setCosts] = useState({});
-  const [taxes, setTaxes] = useState({});
+  const [globalTax, setGlobalTax] = useState("");
+  const [initialGlobalTax, setInitialGlobalTax] = useState("");
+  const [hasMixedTaxRates, setHasMixedTaxRates] = useState(false);
   const [saving, setSaving] = useState({});
   const [savingAll, setSavingAll] = useState(false);
   const [message, setMessage] = useState("");
@@ -719,11 +755,11 @@ function CostPricePage({ user, onLogout, onNavigate }) {
           (result || []).map((p) => [p.nm_id, p.cost_price === null || p.cost_price === undefined ? "" : String(p.cost_price)])
         )
       );
-      setTaxes(
-        Object.fromEntries(
-          (result || []).map((p) => [p.nm_id, p.tax_rate === null || p.tax_rate === undefined ? "" : String(p.tax_rate)])
-        )
-      );
+      const uniqueTaxes = Array.from(new Set((result || []).map((p) => normalizeCostValue(p.tax_rate)).filter(Boolean)));
+      const nextGlobalTax = uniqueTaxes.length === 1 ? uniqueTaxes[0] : "";
+      setGlobalTax(nextGlobalTax);
+      setInitialGlobalTax(nextGlobalTax);
+      setHasMixedTaxRates(uniqueTaxes.length > 1);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -743,18 +779,16 @@ function CostPricePage({ user, onLogout, onNavigate }) {
   async function save(product) {
     const parsed = parseCost(costs[product.nm_id]);
     if (!parsed.ok) { setError(parsed.message); return; }
-    const parsedTax = parseTax(taxes[product.nm_id]);
-    if (!parsedTax.ok) { setError(parsedTax.message); return; }
     setSaving((c) => ({ ...c, [product.nm_id]: true }));
     setError("");
     setMessage("");
     try {
       await api(`/products/${product.nm_id}/cost-price`, {
         method: "PATCH",
-        body: JSON.stringify({ cost_price: parsed.value, tax_rate: parsedTax.value, vendor_code: product.vendor_code, name: product.name }),
+        body: JSON.stringify({ cost_price: parsed.value, vendor_code: product.vendor_code, name: product.name }),
       });
       setMessage(`Сохранено: ${product.vendor_code || product.nm_id}.`);
-      setProducts((prev) => prev.map((p) => p.nm_id === product.nm_id ? { ...p, cost_price: parsed.value, tax_rate: parsedTax.value } : p));
+      setProducts((prev) => prev.map((p) => p.nm_id === product.nm_id ? { ...p, cost_price: parsed.value } : p));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -764,29 +798,37 @@ function CostPricePage({ user, onLogout, onNavigate }) {
 
   async function saveAll() {
     const changed = changedProducts;
-    if (!changed.length) { setMessage("Нет изменений для сохранения."); return; }
+    const taxChanged = normalizeCostInput(globalTax) !== initialGlobalTax;
+    const productsToSave = taxChanged ? products : changed;
+    if (!productsToSave.length) { setMessage("Нет изменений для сохранения."); return; }
     const invalid = changed.map((p) => ({ p, parsed: parseCost(costs[p.nm_id]) })).find((x) => !x.parsed.ok);
     if (invalid) { setError(`${invalid.p.vendor_code || invalid.p.nm_id}: ${invalid.parsed.message}`); return; }
+    const parsedTax = parseTax(globalTax);
+    if (!parsedTax.ok) { setError(parsedTax.message); return; }
     setSavingAll(true);
     setError("");
     setMessage("");
-    setSaving((c) => ({ ...c, ...Object.fromEntries(changed.map((p) => [p.nm_id, true])) }));
+    setSaving((c) => ({ ...c, ...Object.fromEntries(productsToSave.map((p) => [p.nm_id, true])) }));
     try {
-      for (const product of changed) {
+      for (const product of productsToSave) {
         const parsed = parseCost(costs[product.nm_id]);
-        const parsedTax = parseTax(taxes[product.nm_id]);
         await api(`/products/${product.nm_id}/cost-price`, {
           method: "PATCH",
-          body: JSON.stringify({ cost_price: parsed.value, tax_rate: parsedTax.ok ? parsedTax.value : undefined, vendor_code: product.vendor_code, name: product.name }),
+          body: JSON.stringify({
+            cost_price: parsed.value,
+            tax_rate: parsedTax.value,
+            vendor_code: product.vendor_code,
+            name: product.name,
+          }),
         });
       }
-      setMessage(`Сохранено товаров: ${changed.length}.`);
+      setMessage(`Сохранено товаров: ${productsToSave.length}.`);
       await load();
     } catch (err) {
       setError(err.message);
     } finally {
       setSavingAll(false);
-      setSaving((c) => ({ ...c, ...Object.fromEntries(changed.map((p) => [p.nm_id, false])) }));
+      setSaving((c) => ({ ...c, ...Object.fromEntries(productsToSave.map((p) => [p.nm_id, false])) }));
     }
   }
 
@@ -826,15 +868,14 @@ function CostPricePage({ user, onLogout, onNavigate }) {
 
   const changedProducts = useMemo(() => {
     return products.filter((p) => {
-      const costChanged = normalizeCostValue(p.cost_price) !== normalizeCostInput(costs[p.nm_id]);
-      const currentTax = p.tax_rate === null || p.tax_rate === undefined ? "" : String(p.tax_rate);
-      const nextTax = taxes[p.nm_id] ?? "";
-      const taxChanged = currentTax !== nextTax;
-      return costChanged || taxChanged;
+      return normalizeCostValue(p.cost_price) !== normalizeCostInput(costs[p.nm_id]);
     });
-  }, [products, costs, taxes]);
+  }, [products, costs]);
 
   const noCostCount = products.filter((p) => p.cost_price === null || p.cost_price === undefined).length;
+  const globalTaxChanged = normalizeCostInput(globalTax) !== initialGlobalTax;
+  const hasPendingChanges = changedProducts.length > 0 || globalTaxChanged;
+  const saveTargetsCount = globalTaxChanged ? products.length : changedProducts.length;
 
   return (
     <AppShell
@@ -853,8 +894,8 @@ function CostPricePage({ user, onLogout, onNavigate }) {
           <p>Заполните себестоимость один раз. SellerPulse будет использовать её во всех будущих отчётах автоматически.</p>
         </div>
         <div className="cost-title-actions">
-          <button type="button" className="primary" onClick={saveAll} disabled={loading || savingAll || !changedProducts.length}>
-            <Save size={17} /> {savingAll ? "Сохраняем..." : `Сохранить изменения${changedProducts.length ? ` (${changedProducts.length})` : ""}`}
+          <button type="button" className="primary" onClick={saveAll} disabled={loading || savingAll || !hasPendingChanges}>
+            <Save size={17} /> {savingAll ? "Сохраняем..." : `Сохранить изменения${saveTargetsCount ? ` (${saveTargetsCount})` : ""}`}
           </button>
           <button type="button" onClick={load} disabled={loading}><RefreshCcw size={17} /> Обновить</button>
         </div>
@@ -862,6 +903,11 @@ function CostPricePage({ user, onLogout, onNavigate }) {
 
       {message && <div className="notice info">{message}</div>}
       {error && <div className="notice warning"><AlertTriangle size={18} /> {error}</div>}
+      {hasMixedTaxRates && !globalTaxChanged && (
+        <div className="notice warning">
+          <AlertTriangle size={18} /> У товаров сейчас разные ставки налога. Укажите одну общую ставку и сохраните изменения.
+        </div>
+      )}
 
       {/* Import panel */}
       <section className="panel cost-import-panel">
@@ -889,6 +935,25 @@ function CostPricePage({ user, onLogout, onNavigate }) {
       </section>
 
       <section className="panel cost-panel">
+        <div className="cost-global-tax">
+          <div className="cost-global-tax-copy">
+            <strong>Общий налог для всех товаров</strong>
+            <p>Одна ставка применяется ко всем товарам в расчётах прибыли на главной. По строкам налог больше не задаётся.</p>
+          </div>
+          <label className="settings-field cost-global-tax-field">
+            <span>Налог, %</span>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
+              placeholder="Напр. 6"
+              value={globalTax}
+              onChange={(e) => setGlobalTax(e.target.value)}
+            />
+          </label>
+        </div>
+
         <div className="cost-toolbar">
           <label className="search-box cost-search">
             <Search size={18} />
@@ -903,9 +968,9 @@ function CostPricePage({ user, onLogout, onNavigate }) {
           </div>
           <div className="cost-toolbar-meta">
             <span>{filteredProducts.length} товаров</span>
-            {changedProducts.length > 0 && (
+            {hasPendingChanges && (
               <button type="button" className="primary small" onClick={saveAll} disabled={savingAll}>
-                <Save size={14} /> Сохранить всё ({changedProducts.length})
+                <Save size={14} /> Сохранить всё ({saveTargetsCount})
               </button>
             )}
           </div>
@@ -921,7 +986,6 @@ function CostPricePage({ user, onLogout, onNavigate }) {
                   <th>Название товара</th>
                   <th>Текущая себестоимость</th>
                   <th>Новая себестоимость</th>
-                  <th title="Налог % для расчёта прибыли на главной (например: 6 для УСН 6%)">Налог % ℹ</th>
                   <th>Обновлено</th>
                   <th>Действие</th>
                 </tr>
@@ -929,7 +993,8 @@ function CostPricePage({ user, onLogout, onNavigate }) {
               <tbody>
                 {filteredProducts.map((product) => {
                   const hasCost = product.cost_price !== null && product.cost_price !== undefined;
-                  const isChanged = normalizeCostValue(product.cost_price) !== normalizeCostInput(costs[product.nm_id]);
+                  const costChanged = normalizeCostValue(product.cost_price) !== normalizeCostInput(costs[product.nm_id]);
+                  const isChanged = costChanged;
                   return (
                     <tr key={product.nm_id} className={isChanged ? "row-changed" : ""}>
                       <td>{product.nm_id}</td>
@@ -951,19 +1016,6 @@ function CostPricePage({ user, onLogout, onNavigate }) {
                           onChange={(e) => setCosts((c) => ({ ...c, [product.nm_id]: e.target.value }))}
                         />
                       </td>
-                      <td>
-                        <input
-                          className="cost-input tax-input"
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="0.1"
-                          placeholder="напр. 6"
-                          value={taxes[product.nm_id] ?? ""}
-                          onChange={(e) => setTaxes((t) => ({ ...t, [product.nm_id]: e.target.value }))}
-                        />
-                        {taxes[product.nm_id] ? <small className="tax-hint">%</small> : null}
-                      </td>
                       <td className="cost-date">{product.updated_at ? product.updated_at.slice(0, 10) : "—"}</td>
                       <td>
                         <button
@@ -979,7 +1031,7 @@ function CostPricePage({ user, onLogout, onNavigate }) {
                   );
                 })}
                 {!filteredProducts.length && (
-                  <tr><td colSpan="8" className="empty">
+                  <tr><td colSpan="7" className="empty">
                     {products.length ? "По запросу ничего не найдено." : "Загрузите финансовый отчёт WB или синхронизируйте токен — товары появятся здесь."}
                   </td></tr>
                 )}
@@ -1958,15 +2010,29 @@ const SYNC_STEP_LABELS = {
 const SYNC_TYPE_LABELS = {
   initial_full_sync: "Первичная синхронизация WB",
   manual_sync: "Синхронизация WB API",
+  retry_partial: "Повтор пропущенных шагов WB",
   daily_sync: "Ежедневная синхронизация",
   auto_sync: "Автоматическая синхронизация",
 };
 
 function SyncProgressBanner({ syncStatus, onRestart }) {
   if (!syncStatus || syncStatus.status === "not_started") return null;
-  const isActive = ["queued", "running", "partial"].includes(syncStatus.status);
+  const isPartial = syncStatus.status === "partial";
+  const isActive = syncStatus.status === "queued" || syncStatus.status === "running" || (isPartial && !syncStatus.finished_at);
   const isCompleted = syncStatus.status === "completed";
   const isFailed = syncStatus.status === "failed";
+  const isPartialDone = isPartial && !!syncStatus.finished_at;
+  const completedSteps = (syncStatus.steps || []).filter((step) => step.status === "completed").length;
+  const skippedSteps = (syncStatus.steps || []).filter((step) => step.status === "skipped").length;
+  const warningSteps = (syncStatus.steps || []).filter((step) => step.status === "skipped" || step.status === "failed");
+  const warningStepNames = warningSteps
+    .map((step) => SYNC_STEP_LABELS[step.step_name] || step.step_name)
+    .join(", ");
+  const warningReason = [...new Set(warningSteps.map((step) => step.error_message).filter(Boolean))]
+    .join("; ");
+  const statusLabel = isPartialDone
+    ? `Частично завершена · ${completedSteps}/${syncStatus.steps?.length || 0}`
+    : `${syncStatus.progress_percent}%`;
 
   const stepIcon = (s) => {
     if (s === "completed") return <CheckCircle2 size={14} className="step-icon ok" />;
@@ -1979,13 +2045,14 @@ function SyncProgressBanner({ syncStatus, onRestart }) {
   if (isCompleted) return null;
 
   return (
-    <section className={`sync-progress-banner ${isFailed ? "sync-banner--failed" : ""}`}>
+    <section className={`sync-progress-banner ${isFailed ? "sync-banner--failed" : ""} ${isPartialDone ? "sync-banner--partial" : ""}`}>
       <div className="sync-banner-header">
         <div className="sync-banner-title">
           {isActive && <RefreshCcw size={16} className="spin" />}
+          {isPartialDone && <AlertTriangle size={16} className="warn" />}
           {isFailed && <AlertTriangle size={16} />}
           <strong>{SYNC_TYPE_LABELS[syncStatus.sync_type] || "Синхронизация WB"}</strong>
-          <span className="sync-banner-status">{syncStatus.progress_percent}%</span>
+          <span className="sync-banner-status">{statusLabel}</span>
         </div>
         <div className="sync-progress-bar">
           <div className="sync-progress-fill" style={{ width: `${syncStatus.progress_percent}%` }} />
@@ -1995,7 +2062,7 @@ function SyncProgressBanner({ syncStatus, onRestart }) {
       {syncStatus.steps && syncStatus.steps.length > 0 && (
         <div className="sync-steps-grid">
           {syncStatus.steps.map((step) => (
-            <div key={step.step_name} className={`sync-step sync-step--${step.status}`}>
+            <div key={step.step_name} className={`sync-step sync-step--${step.status}`} title={step.error_message || ""}>
               {stepIcon(step.status)}
               <span className="sync-step-name">{SYNC_STEP_LABELS[step.step_name] || step.step_name}</span>
               {step.records_saved != null && (
@@ -2010,6 +2077,23 @@ function SyncProgressBanner({ syncStatus, onRestart }) {
         <p className="sync-banner-hint">
           Синхронизация обычно занимает 2–5 минут. Можно закрыть страницу — синхронизация продолжится автоматически.
         </p>
+      )}
+      {isActive && warningSteps.length > 0 && (
+        <p className="sync-banner-hint sync-banner-hint--warn">
+          WB пока не отдал: {warningStepNames}. {warningReason ? `Причина: ${warningReason}. ` : ""}Повторяем автоматически.
+        </p>
+      )}
+      {isPartialDone && (
+        <div className="sync-banner-failed-row">
+          <p className="sync-banner-hint sync-banner-hint--warn">
+            Завершено с предупреждениями: получено {completedSteps} шагов, пропущено {skippedSteps}. {warningStepNames ? `Проблемные шаги: ${warningStepNames}.` : ""} {warningReason ? `Причина: ${warningReason}.` : ""}
+          </p>
+          {onRestart && (
+            <button className="btn-secondary btn-sm" onClick={onRestart}>
+              <RefreshCcw size={13} /> Повторить синхронизацию
+            </button>
+          )}
+        </div>
       )}
       {isFailed && (
         <div className="sync-banner-failed-row">

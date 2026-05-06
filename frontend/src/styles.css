@@ -985,6 +985,35 @@ tbody tr:hover td { background: rgba(22,119,255,.03); }
   gap: 14px;
   margin-bottom: 16px;
 }
+.cost-global-tax {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: linear-gradient(135deg, #f7fcff, #f4fdf8);
+}
+.cost-global-tax-copy {
+  display: grid;
+  gap: 4px;
+}
+.cost-global-tax-copy strong {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+}
+.cost-global-tax-copy p {
+  margin: 0;
+  max-width: 760px;
+  font-size: 13px;
+}
+.cost-global-tax-field {
+  max-width: 180px;
+  min-width: 180px;
+}
 .cost-search { max-width: 530px; }
 .cost-toolbar-meta { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
 .cost-toolbar span, .cost-toolbar-meta span { color: var(--muted); font-size: 13px; font-weight: 700; }
@@ -1358,6 +1387,7 @@ tbody tr:hover td { background: rgba(22,119,255,.03); }
   gap: 10px;
 }
 .sync-progress-banner.sync-banner--failed { background: linear-gradient(135deg, #fff4f4, #fff0ef); border-color: #f8c4c4; }
+.sync-progress-banner.sync-banner--partial { background: linear-gradient(135deg, #fffaf0, #f7fbff); border-color: #f2d08a; }
 .sync-banner-header { display: flex; flex-direction: column; gap: 7px; }
 .sync-banner-title { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 800; }
 .sync-banner-status {
@@ -1385,6 +1415,11 @@ tbody tr:hover td { background: rgba(22,119,255,.03); }
   background-size: 400px 100%;
   animation: shimmer 2s linear infinite;
 }
+.sync-progress-banner.sync-banner--partial .sync-progress-fill {
+  background: linear-gradient(90deg, #e6a700 0%, #f0b429 50%, #2185ff 100%);
+  background-size: auto;
+  animation: none;
+}
 .sync-steps-grid { display: flex; flex-wrap: wrap; gap: 5px 13px; }
 .sync-step { display: flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted); }
 .sync-step--completed { color: #065648; font-weight: 750; }
@@ -1400,6 +1435,7 @@ tbody tr:hover td { background: rgba(22,119,255,.03); }
 .step-icon.dot { font-size: 14px; line-height: 1; color: var(--muted-soft); }
 .sync-banner-hint { font-size: 12.5px; color: var(--muted); margin: 0; line-height: 1.5; }
 .sync-banner-hint--error { color: #8b1f1c; }
+.sync-banner-hint--warn { color: #8b5b00; }
 .sync-banner-failed-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .sync-banner-failed-row .sync-banner-hint { flex: 1; }
 .btn-sm { padding: 4px 10px; font-size: 12px; gap: 4px; }
@@ -1942,7 +1978,7 @@ tbody tr:hover td { background: rgba(22,119,255,.03); }
   .auth-card-inner { padding: 18px; border-radius: 20px; }
   .auth-benefits, .metrics-grid, .expenses-grid { grid-template-columns: 1fr; }
   .panel, .hero-card, .page-title { padding: 16px; border-radius: var(--r-xl); }
-  .page-title, .cost-toolbar, .report-toolbar, .report-panel-head { align-items: stretch; flex-direction: column; }
+  .page-title, .cost-toolbar, .report-toolbar, .report-panel-head, .cost-global-tax { align-items: stretch; flex-direction: column; }
   .report-tax-banner { align-items: stretch; flex-direction: column; }
   .report-tax-inline { justify-content: stretch; }
   .top-actions { align-items: stretch; flex-direction: column; }

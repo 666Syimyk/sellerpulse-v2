@@ -90,6 +90,8 @@ def list_products(user: User = Depends(current_user), db: Session = Depends(get_
 def update_cost_price(nm_id: int, payload: CostPriceIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     if payload.cost_price is not None and payload.cost_price < 0:
         raise HTTPException(status_code=400, detail="Себестоимость не может быть отрицательной")
+    if payload.tax_rate is not None and (payload.tax_rate < 0 or payload.tax_rate > 100):
+        raise HTTPException(status_code=400, detail="Tax rate must be between 0 and 100")
 
     product = _find_product_by_user_nm(db, user.id, nm_id)
     if not product:
@@ -106,7 +108,7 @@ def update_cost_price(nm_id: int, payload: CostPriceIn, user: User = Depends(cur
 
     _record_history(db, user.id, product, payload.cost_price)
     product.cost_price = payload.cost_price
-    if payload.tax_rate is not None:
+    if "tax_rate" in payload.model_fields_set:
         product.tax_rate = payload.tax_rate
     if payload.vendor_code and not product.vendor_code:
         product.vendor_code = payload.vendor_code

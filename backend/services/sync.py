@@ -361,13 +361,11 @@ def _save_sales(db: Session, user_id: int, wb_token_id: int, rows: list[dict], d
         _upsert_product(db, user_id, wb_token_id, nm_id, row.get("supplierArticle") or row.get("sa_name"), _product_name(row), row.get("brand"), row.get("subject"))
         key = (nm_id, sale_date)
         item = grouped.setdefault(key, {"quantity": 0, "before": 0.0, "spp": 0.0, "after": 0.0})
-        before = _first_float(row, "priceWithDisc", "retail_price_withdisc_rub", "retailPriceWithDisc", "retail_amount", "retailAmount")
-        after = _first_float(row, "finishedPrice", "retail_price_withdisc_rub", "retailPriceWithDisc", "priceWithDisc", "forPay", "ppvzForPay")
+        before = _first_float(row, "priceWithDisc", "retail_price_withdisc_rub", "retailPriceWithDisc")
+        after = _first_float(row, "finishedPrice")
         if after is None and before is not None:
             after = before
-        spp = _first_float(row, "spp")
-        if spp is None and before is not None and after is not None:
-            spp = max(before - after, 0)
+        spp = max(before - after, 0) if before is not None and after is not None else None
         item["quantity"] += quantity
         item["before"] += before or 0
         item["after"] += after or 0
@@ -492,7 +490,7 @@ def _save_financial_report(db: Session, user_id: int, wb_token_id: int, rows: li
                 "other_expenses": 0.0,
             },
         )
-        item["commission"] += _expense_amount(row, "ppvzSalesCommission", "ppvz_sales_commission", "ppvzReward", "ppvz_reward")
+        item["commission"] += _expense_amount(row, "ppvzSalesCommission", "ppvz_sales_commission")
         item["logistics"] += _expense_amount(row, "deliveryRub", "delivery_rub", "deliveryService") + _expense_amount(row, "rebillLogisticCost", "rebill_logistic_cost")
         item["storage"] += _expense_amount(row, "storageFee", "storage_fee", "paidStorage")
         item["returns"] += _expense_amount(row, "returnAmount", "return_amount")

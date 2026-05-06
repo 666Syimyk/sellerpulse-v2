@@ -12,6 +12,28 @@ def test_update_cost_price(auth_client):
     assert data["cost_price"] == 150.0
 
 
+def test_update_tax_rate(auth_client):
+    resp = auth_client.put("/products/12345/cost-price", json={"cost_price": 150.0, "tax_rate": 6.0})
+    assert resp.status_code == 200
+    assert resp.json()["tax_rate"] == 6.0
+
+    products = auth_client.get("/products").json()
+    found = next((p for p in products if p["nm_id"] == 12345), None)
+    assert found["tax_rate"] == 6.0
+
+
+def test_clear_tax_rate(auth_client):
+    auth_client.put("/products/12345/cost-price", json={"cost_price": 150.0, "tax_rate": 6.0})
+    resp = auth_client.put("/products/12345/cost-price", json={"cost_price": 150.0, "tax_rate": None})
+    assert resp.status_code == 200
+    assert resp.json()["tax_rate"] is None
+
+
+def test_update_tax_rate_out_of_range(auth_client):
+    resp = auth_client.put("/products/12345/cost-price", json={"cost_price": 150.0, "tax_rate": 101.0})
+    assert resp.status_code == 400
+
+
 def test_update_cost_price_negative(auth_client):
     resp = auth_client.put("/products/12345/cost-price", json={"cost_price": -1.0})
     assert resp.status_code == 400
@@ -36,12 +58,12 @@ def test_list_products_after_update(auth_client):
 
 
 def test_products_isolated_between_users(client):
-    client.post("/auth/register", json={"email": "user_a@example.com", "password": "pass"})
-    resp_a = client.post("/auth/login", json={"email": "user_a@example.com", "password": "pass"})
+    client.post("/auth/register", json={"email": "user_a@example.com", "password": "pass123"})
+    resp_a = client.post("/auth/login", json={"email": "user_a@example.com", "password": "pass123"})
     token_a = resp_a.json()["access_token"]
 
-    client.post("/auth/register", json={"email": "user_b@example.com", "password": "pass"})
-    resp_b = client.post("/auth/login", json={"email": "user_b@example.com", "password": "pass"})
+    client.post("/auth/register", json={"email": "user_b@example.com", "password": "pass123"})
+    resp_b = client.post("/auth/login", json={"email": "user_b@example.com", "password": "pass123"})
     token_b = resp_b.json()["access_token"]
 
     client.put("/products/55555/cost-price", json={"cost_price": 111.0},

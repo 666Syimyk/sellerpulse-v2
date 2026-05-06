@@ -25,9 +25,11 @@ class PromoteIn(BaseModel):
 @router.post("/promote")
 def promote_to_admin(payload: PromoteIn, db: Session = Depends(get_db)):
     settings = get_settings()
-    has_admin = db.scalar(select(User).where(User.is_admin == True)) is not None  # noqa: E712
-    if has_admin and payload.secret != settings.admin_secret:
-        raise HTTPException(status_code=403, detail="Неверный секрет")
+    existing_admin = db.scalar(select(User).where(User.is_admin == True))  # noqa: E712
+    if existing_admin is not None:
+        if payload.secret != settings.admin_secret:
+            raise HTTPException(status_code=403, detail="Неверный секрет")
+        raise HTTPException(status_code=400, detail="Администратор уже существует")
     user = db.scalar(select(User).where(User.email == payload.email))
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
@@ -170,10 +172,12 @@ def bulk_patch_subscription(payload: BulkSubscriptionPatch, db: Session = Depend
 
 
 @router.patch("/users/{user_id}/admin")
-def toggle_admin(user_id: int, db: Session = Depends(get_db), _: User = Depends(admin_user)):
+def toggle_admin(user_id: int, db: Session = Depends(get_db), current_admin: User = Depends(admin_user)):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
+    if not user.is_admin and user.id != current_admin.id:
+        raise HTTPException(status_code=400, detail="Администратор уже существует")
     user.is_admin = not user.is_admin
     db.commit()
     return {"ok": True, "is_admin": user.is_admin}
