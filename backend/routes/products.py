@@ -71,6 +71,8 @@ def list_products(user: User = Depends(current_user), db: Session = Depends(get_
                 Product.wb_token_id.is_(None),
             )
         )
+    else:
+        query = query.where(Product.wb_token_id.is_(None))
     products = db.scalars(query.order_by(Product.nm_id.asc())).all()
     seen_nm: set[int] = set()
     result = []

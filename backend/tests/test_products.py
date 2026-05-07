@@ -110,3 +110,23 @@ def test_list_products_shows_only_active_token_products(auth_client, db):
     assert resp.status_code == 200
     nm_ids = {item["nm_id"] for item in resp.json()}
     assert nm_ids == {101, 303}
+
+
+def test_list_products_without_active_token_hides_old_token_products(auth_client, db):
+    from models.entities import Product, User, WbToken
+
+    user = db.query(User).filter_by(email="test@example.com").first()
+    old_token = WbToken(user_id=user.id, encrypted_token="y", token_status="active", is_active=False, shop_name="Old")
+    db.add(old_token)
+    db.flush()
+
+    db.add_all([
+        Product(user_id=user.id, wb_token_id=old_token.id, nm_id=202, vendor_code="OLD", name="Old product"),
+        Product(user_id=user.id, wb_token_id=None, nm_id=303, vendor_code="MANUAL", name="Manual product"),
+    ])
+    db.commit()
+
+    resp = auth_client.get("/products")
+    assert resp.status_code == 200
+    nm_ids = {item["nm_id"] for item in resp.json()}
+    assert nm_ids == {303}
