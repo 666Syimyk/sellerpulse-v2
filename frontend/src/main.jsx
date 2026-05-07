@@ -1450,7 +1450,6 @@ function FinancialReportPage({ user, onLogout, onNavigate }) {
   const rawTotalPages = Math.max(1, Math.ceil(filteredRawRows.length / RAW_PAGE_SIZE));
   const rawPageRows = filteredRawRows.slice((rawPage - 1) * RAW_PAGE_SIZE, rawPage * RAW_PAGE_SIZE);
 
-  const shop = { name: "Финансовый отчёт WB", token_status: "active" };
   const report = reportData.report;
 
   return (
@@ -1459,7 +1458,6 @@ function FinancialReportPage({ user, onLogout, onNavigate }) {
       active="financial-report"
       onLogout={onLogout}
       onNavigate={onNavigate}
-      shop={shop}
       searchValue={activeTab === "raw" ? rawQuery : query}
       onSearchChange={activeTab === "raw" ? (v) => { setRawQuery(v); setRawPage(1); } : setQuery}
       searchPlaceholder="Поиск по nmID, артикулу или названию..."
@@ -1890,6 +1888,11 @@ function AppShell({
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const canSearch = typeof onSearchChange === "function";
+  const accountName = shop?.name || user?.name || "SellerPulse";
+  const accountMeta = shop?.token_status
+    ? STATUS_META[shop.token_status]?.text || shop.token_status
+    : "Аккаунт SellerPulse";
+  const tokenDotStatus = shop?.token_status === "active" ? "ok" : "warn";
 
   function goTo(screen) {
     setAccountOpen(false);
@@ -1962,7 +1965,7 @@ function AppShell({
                   <strong>Состояние Dashboard</strong>
                   <span>{syncing ? "Синхронизация выполняется." : "Синхронизация не запущена."}</span>
                   <span>Токен: {STATUS_META[shop?.token_status]?.text || shop?.token_status || "не подключён"}</span>
-                  <span>Кабинет: {shop?.name || user?.name || "SellerPulse"}</span>
+                  <span>Кабинет: {accountName}</span>
                 </div>
               )}
             </div>
@@ -1975,10 +1978,10 @@ function AppShell({
                   setNotificationsOpen(false);
                 }}
               >
-                <span className={`status-dot status-dot--${shop?.token_status === "active" ? "ok" : "warn"}`} />
+                <span className={`status-dot status-dot--${tokenDotStatus}`} />
                 <span>
-                  <strong>{shop?.name || user?.name || "SellerPulse"}</strong>
-                  <small>{STATUS_META[shop?.token_status]?.text || shop?.token_status || "WB кабинет"}</small>
+                  <strong>{accountName}</strong>
+                  <small>{accountMeta}</small>
                 </span>
                 <ChevronDown size={16} />
               </button>
