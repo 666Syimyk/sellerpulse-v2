@@ -144,6 +144,16 @@ function App() {
     afterAuth(user);
   }
 
+  function onTokenDeleted() {
+    setSession((current) => ({
+      ...current,
+      user: current.user
+        ? { ...current.user, has_wb_token: false, token_status: null }
+        : current.user,
+    }));
+    setScreen("token");
+  }
+
   function logout() {
     setToken(null);
     setSession({ loading: false, user: null });
@@ -155,7 +165,7 @@ function App() {
   if (screen === "auth" || !session.user) return <AuthPage onAuth={onAuth} onBack={() => setScreen("landing")} />;
   if (screen === "subscription") return <SubscriptionPage user={session.user} onLogout={logout} onActivated={() => afterAuth(session.user)} />;
   if (screen === "admin") return <AdminPage user={session.user} onLogout={logout} onNavigate={setScreen} />;
-  if (screen === "token") return <TokenPage user={session.user} onConnected={() => setScreen("dashboard")} onLogout={logout} onNavigate={setScreen} />;
+  if (screen === "token") return <TokenPage user={session.user} onConnected={() => setScreen("dashboard")} onTokenDeleted={onTokenDeleted} onLogout={logout} onNavigate={setScreen} />;
   if (screen === "costs") return <CostPricePage user={session.user} onLogout={logout} onNavigate={setScreen} />;
   if (screen === "financial-report") return <FinancialReportPage user={session.user} onLogout={logout} onNavigate={setScreen} />;
   return <Dashboard user={session.user} onLogout={logout} onNavigate={setScreen} />;
@@ -285,7 +295,7 @@ function AuthPage({ onAuth, onBack }) {
   );
 }
 
-function TokenPage({ user, onConnected, onLogout, onNavigate }) {
+function TokenPage({ user, onConnected, onTokenDeleted, onLogout, onNavigate }) {
   const [token, setTokenValue] = useState("");
   const [status, setStatus] = useState(null);
   const [dashboard, setDashboard] = useState(null);
@@ -372,6 +382,7 @@ function TokenPage({ user, onConnected, onLogout, onNavigate }) {
       setDashboard(null);
       setTokenValue("");
       setMessage(result.message || "WB API-токен удалён.");
+      onTokenDeleted?.();
     } catch (err) {
       setError(err.message);
     } finally {
