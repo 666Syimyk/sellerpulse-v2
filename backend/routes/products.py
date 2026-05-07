@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -62,11 +62,16 @@ def _record_history(db: Session, user_id: int, product: Product, new_cost: float
 
 @router.get("")
 def list_products(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    products = db.scalars(
-        select(Product)
-        .where(Product.user_id == user.id)
-        .order_by(Product.nm_id.asc())
-    ).all()
+    active_token = _active_token(db, user.id)
+    query = select(Product).where(Product.user_id == user.id)
+    if active_token:
+        query = query.where(
+            or_(
+                Product.wb_token_id == active_token.id,
+                Product.wb_token_id.is_(None),
+            )
+        )
+    products = db.scalars(query.order_by(Product.nm_id.asc())).all()
     seen_nm: set[int] = set()
     result = []
     for p in products:
