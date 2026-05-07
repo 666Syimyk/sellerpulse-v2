@@ -167,7 +167,6 @@ function App() {
   if (screen === "admin") return <AdminPage user={session.user} onLogout={logout} onNavigate={setScreen} />;
   if (screen === "token") return <TokenPage user={session.user} onConnected={() => setScreen("dashboard")} onTokenDeleted={onTokenDeleted} onLogout={logout} onNavigate={setScreen} />;
   if (screen === "costs") return <CostPricePage user={session.user} onLogout={logout} onNavigate={setScreen} />;
-  if (screen === "financial-report") return <FinancialReportPage user={session.user} onLogout={logout} onNavigate={setScreen} />;
   return <Dashboard user={session.user} onLogout={logout} onNavigate={setScreen} />;
 }
 
@@ -819,7 +818,6 @@ function DashboardEmptyState({ data, onNavigate, onSync, syncing }) {
             ? <button type="button" className="primary" onClick={onSync} disabled={syncing}><RefreshCcw size={17} /> {syncing ? "Синхронизируем..." : "Синхронизировать"}</button>
             : <button type="button" className="primary" onClick={() => onNavigate("wb-token")}><KeyRound size={17} /> Подключить WB токен</button>
           }
-          <button type="button" onClick={() => onNavigate("financial-report")}><UploadCloud size={17} /> Загрузить финансовый отчёт WB</button>
         </div>
       </div>
     </section>
@@ -1907,7 +1905,6 @@ function AppShell({
           <NavItem icon={Gauge} label="Главная" active={active === "dashboard"} onClick={() => onNavigate("dashboard")} />
           <NavItem icon={KeyRound} label="Токен WB" active={active === "token"} onClick={() => onNavigate("token")} />
           <NavItem icon={WalletCards} label="Себестоимость" active={active === "costs"} onClick={() => onNavigate("costs")} />
-          <NavItem icon={FileSpreadsheet} label="Финансовый отчёт" active={active === "financial-report"} onClick={() => onNavigate("financial-report")} />
           {user?.is_admin && <NavItem icon={BriefcaseBusiness} label="Администратор" active={active === "admin"} onClick={() => onNavigate("admin")} />}
         </nav>
         <div className="sidebar-footer">
@@ -1990,7 +1987,6 @@ function AppShell({
                   <button type="button" onClick={() => goTo("dashboard")}><Gauge size={16} /> Главная</button>
                   <button type="button" onClick={() => goTo("token")}><KeyRound size={16} /> Токен WB</button>
                   <button type="button" onClick={() => goTo("costs")}><WalletCards size={16} /> Себестоимость</button>
-                  <button type="button" onClick={() => goTo("financial-report")}><FileSpreadsheet size={16} /> Финансовый отчёт</button>
                   <button type="button" className="danger-menu" onClick={onLogout}><LogOut size={16} /> Выйти</button>
                 </div>
               )}
@@ -2001,7 +1997,6 @@ function AppShell({
           <NavItem icon={Gauge} label="Главная" active={active === "dashboard"} onClick={() => onNavigate("dashboard")} />
           <NavItem icon={KeyRound} label="Токен WB" active={active === "token"} onClick={() => onNavigate("token")} />
           <NavItem icon={WalletCards} label="Себестоимость" active={active === "costs"} onClick={() => onNavigate("costs")} />
-          <NavItem icon={FileSpreadsheet} label="Финансовый отчёт" active={active === "financial-report"} onClick={() => onNavigate("financial-report")} />
           <button onClick={onLogout}><LogOut size={17} /> Выйти</button>
         </div>
         <div className="content">{children}</div>
