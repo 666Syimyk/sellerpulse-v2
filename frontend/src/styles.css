@@ -722,6 +722,70 @@ textarea {
 .empty-dashboard h2 { margin-bottom: 8px; }
 .empty-dashboard p:not(.eyebrow) { max-width: 700px; margin-bottom: 20px; }
 
+.focus-board { margin-bottom: 18px; }
+.focus-board-head { margin-bottom: 16px; }
+.focus-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.focus-card {
+  display: grid;
+  gap: 12px;
+  min-height: 196px;
+  padding: 18px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  background: #fff;
+  box-shadow: var(--shadow-xs);
+}
+.focus-card--danger { background: linear-gradient(135deg, #fff7f7, #fffefe); border-color: #f6c5c5; }
+.focus-card--warning { background: linear-gradient(135deg, #fffaf0, #fffefe); border-color: #f4d79c; }
+.focus-card--info { background: linear-gradient(135deg, #f4f9ff, #f7fffd); border-color: #c5dcfb; }
+.focus-card--neutral { background: linear-gradient(135deg, #f8fbff, #ffffff); }
+.focus-card--success { background: linear-gradient(135deg, #eefcf5, #ffffff); border-color: #b9e6ca; }
+.focus-card-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.focus-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--primary);
+  flex-shrink: 0;
+}
+.focus-card--danger .focus-icon { background: var(--danger-soft); color: var(--danger); }
+.focus-card--warning .focus-icon { background: var(--warning-soft); color: var(--warning); }
+.focus-card--info .focus-icon { background: var(--primary-soft); color: var(--primary); }
+.focus-card--neutral .focus-icon { background: #eaf0f8; color: #486480; }
+.focus-card--success .focus-icon { background: var(--green-soft); color: var(--green); }
+.focus-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.focus-card strong {
+  font-size: 18px;
+  line-height: 1.15;
+  letter-spacing: -.03em;
+}
+.focus-card p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.focus-card button {
+  margin-top: auto;
+  justify-self: flex-start;
+}
+
 /* ── Metrics grid ── */
 .metrics-grid {
   display: grid;
@@ -1942,6 +2006,7 @@ tbody tr:hover td { background: rgba(22,119,255,.03); }
 @media (max-width: 1200px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { display: none; }
+  .focus-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mobile-nav {
     display: flex;
     gap: 5px;
@@ -1964,7 +2029,7 @@ tbody tr:hover td { background: rgba(22,119,255,.03); }
   .sub-contact-options { grid-template-columns: 1fr; }
   .auth-page, .hero-card, .token-layout { grid-template-columns: 1fr; }
   .auth-brand-panel { min-height: auto; gap: 24px; }
-  .auth-benefits, .metrics-grid, .expenses-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .auth-benefits, .metrics-grid, .expenses-grid, .focus-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .auth-illustration { display: none; }
   .hero-widget { grid-template-columns: 1fr 1fr; min-height: auto; }
   .topbar { align-items: stretch; flex-direction: column; }
@@ -1980,7 +2045,7 @@ tbody tr:hover td { background: rgba(22,119,255,.03); }
   .auth-brand-panel { border-radius: var(--r-xl); padding: 20px; }
   .auth-card { padding: 10px; border-radius: var(--r-xl); }
   .auth-card-inner { padding: 18px; border-radius: 20px; }
-  .auth-benefits, .metrics-grid, .expenses-grid { grid-template-columns: 1fr; }
+  .auth-benefits, .metrics-grid, .expenses-grid, .focus-grid { grid-template-columns: 1fr; }
   .panel, .hero-card, .page-title { padding: 16px; border-radius: var(--r-xl); }
   .page-title, .cost-toolbar, .report-toolbar, .report-panel-head, .cost-global-tax { align-items: stretch; flex-direction: column; }
   .report-tax-banner { align-items: stretch; flex-direction: column; }
@@ -1991,6 +2056,7 @@ tbody tr:hover td { background: rgba(22,119,255,.03); }
   .segments { width: 100%; }
   .dashboard-toolbar { flex-direction: column; align-items: stretch; }
   .notice { padding: 12px 14px; }
+  .focus-card { min-height: 0; padding: 16px; }
   .sync-progress-banner { padding: 13px 14px; }
   .sync-banner-title { align-items: flex-start; }
   .sync-banner-status { margin-left: 0; }

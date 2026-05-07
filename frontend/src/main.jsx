@@ -594,10 +594,12 @@ function Dashboard({ user, onLogout, onNavigate }) {
     const statusRank = {
       "Нет себестоимости": 0,
       "В минусе": 1,
-      "Низкая маржа": 2,
-      "Ожидает расходы WB": 3,
-      "Нет данных WB": 4,
-      "В плюсе": 5,
+      "Минус с каждой продажи": 1,
+      "Заканчивается остаток": 2,
+      "Низкая маржа": 3,
+      "Ожидает расходы WB": 4,
+      "Нет данных WB": 5,
+      "В плюсе": 6,
     };
     return filtered.sort((left, right) => {
       if (sortMode === "profit_asc") return nullableNumber(left.profit, Number.NEGATIVE_INFINITY) - nullableNumber(right.profit, Number.NEGATIVE_INFINITY);
@@ -609,6 +611,26 @@ function Dashboard({ user, onLogout, onNavigate }) {
 
   const hasWbApiData = data?.data_source?.type === "wb_api";
   const hasPreliminaryData = hasWbApiData && products.some((r) => r.status === "Ожидает расходы WB");
+  const focusCards = useMemo(() => buildFocusCards(products, hasPreliminaryData), [products, hasPreliminaryData]);
+
+  function applyFocusCard(card) {
+    if (card.navigateTo) {
+      onNavigate(card.navigateTo);
+      return;
+    }
+    if (card.statusFilter) {
+      setStatusFilter(card.statusFilter);
+    }
+    if (card.sortMode) {
+      setSortMode(card.sortMode);
+    }
+    if (card.query) {
+      setQuery(card.query);
+    }
+    if (card.triggerSync) {
+      void sync().catch(() => {});
+    }
+  }
 
   return (
     <AppShell
@@ -674,6 +696,7 @@ function Dashboard({ user, onLogout, onNavigate }) {
         <DashboardEmptyState data={data} onNavigate={onNavigate} onSync={sync} syncing={syncing} />
       ) : (
         <>
+          <FocusBoard cards={focusCards} onAction={applyFocusCard} />
           <section className="metrics-grid">
             <Metric icon={ShoppingCart} label="Продано сегодня, шт." value={number(metrics.sold_qty)} trend="уникальных позиций" />
             <Metric icon={CircleDollarSign} label="Сумма продаж" value={money(metrics.sales_sum)} trend="до СПП" />
@@ -695,6 +718,144 @@ function Dashboard({ user, onLogout, onNavigate }) {
         </>
       )}
     </AppShell>
+  );
+}
+
+function buildFocusCards(products, hasPreliminaryData) {
+  const noCostRows = products.filter((row) => row.status === "Нет себестоимости");
+  const negativeRows = products.filter((row) => ["В минусе", "Минус с каждой продажи"].includes(row.status));
+  const lowStockRows = products.filter((row) => row.status === "Заканчивается остаток" || row.action === "Пополнить остаток");
+  const waitingFinanceRows = products.filter((row) => ["Ожидает расходы WB", "Нет данных WB"].includes(row.status));
+  const lowMarginRows = products.filter((row) => row.status === "Низкая маржа");
+
+  const cards = [];
+
+  if (negativeRows.length) {
+    cards.push({
+      id: "negative",
+      tone: "danger",
+      icon: AlertTriangle,
+      label: "Риск прибыли",
+      title: negativeRows.length === 1 ? "1 товар уходит в минус" : `${negativeRows.length} товаров уходят в минус`,
+      text: previewRows(negativeRows, "Проверь цену, себестоимость и расходы по этим товарам в первую очередь."),
+      button: "Сортировать по убыточности",
+      sortMode: "profit_asc",
+    });
+  }
+
+  if (noCostRows.length) {
+    cards.push({
+      id: "no-cost",
+      tone: "warning",
+      icon: WalletCards,
+      label: "Нужно заполнить",
+      title: noCostRows.length === 1 ? "1 товар без себестоимости" : `${noCostRows.length} товаров без себестоимости`,
+      text: previewRows(noCostRows, "Без себестоимости мы не сможем посчитать чистую прибыль и маржу."),
+      button: "Заполнить себестоимость",
+      navigateTo: "costs",
+    });
+  }
+
+  if (lowStockRows.length) {
+    cards.push({
+      id: "stock",
+      tone: "warning",
+      icon: Boxes,
+      label: "Остатки",
+      title: lowStockRows.length === 1 ? "1 товар скоро закончится" : `${lowStockRows.length} товаров скоро закончатся`,
+      text: previewRows(lowStockRows, "Проверь поставку и остатки, чтобы не потерять продажи."),
+      button: "Показать остатки",
+      statusFilter: "Заканчивается остаток",
+      sortMode: "attention",
+    });
+  }
+
+  if (waitingFinanceRows.length && hasPreliminaryData) {
+    cards.push({
+      id: "finance",
+      tone: "info",
+      icon: Bell,
+      label: "WB данные",
+      title: waitingFinanceRows.length === 1 ? "1 товар ждёт расходы WB" : `${waitingFinanceRows.length} товаров ждут расходы WB`,
+      text: previewRows(waitingFinanceRows, "Продажи уже пришли, а точные расходы WB появятся после финансового отчёта."),
+      button: "Открыть отчёт WB",
+      navigateTo: "financial-report",
+    });
+  }
+
+  if (lowMarginRows.length) {
+    cards.push({
+      id: "margin",
+      tone: "neutral",
+      icon: BadgePercent,
+      label: "Маржа",
+      title: lowMarginRows.length === 1 ? "1 товар с низкой маржой" : `${lowMarginRows.length} товаров с низкой маржой`,
+      text: previewRows(lowMarginRows, "Сверь цену, логистику и рекламу, чтобы вернуть запас по прибыли."),
+      button: "Показать маржу",
+      statusFilter: "Низкая маржа",
+      sortMode: "profit_asc",
+    });
+  }
+
+  if (!cards.length) {
+    cards.push({
+      id: "calm",
+      tone: "success",
+      icon: CheckCircle2,
+      label: "Сегодня спокойно",
+      title: "Критичных сигналов не найдено",
+      text: "Все проданные сегодня товары выглядят нормально. Можно следить за динамикой продаж и расходами WB.",
+      button: "Смотреть таблицу",
+    });
+  }
+
+  return cards;
+}
+
+function previewRows(rows, fallback) {
+  const preview = rows
+    .slice(0, 2)
+    .map((row) => row.vendor_code || row.name || `nmID ${row.nm_id}`)
+    .join(", ");
+  return preview ? `${preview}. ${fallback}` : fallback;
+}
+
+function FocusBoard({ cards, onAction }) {
+  const issueCount = cards.filter((card) => card.id !== "calm").length;
+
+  return (
+    <section className="panel focus-board">
+      <div className="panel-head focus-board-head">
+        <div>
+          <p className="eyebrow">Приоритеты</p>
+          <h2>Что важно сегодня</h2>
+          <p>{issueCount ? `Нашли ${issueCount} зоны, которые стоит проверить в первую очередь.` : "Сегодняшний дашборд выглядит ровно. Ниже уже можно смотреть детали по товарам."}</p>
+        </div>
+        <span className={`status ${issueCount ? "warn" : "ok"}`}>{issueCount ? `${issueCount} в фокусе` : "Без тревог"}</span>
+      </div>
+      <div className="focus-grid">
+        {cards.map((card) => {
+          const Icon = card.icon;
+          return (
+            <article key={card.id} className={`focus-card focus-card--${card.tone}`}>
+              <div className="focus-card-top">
+                <div className="focus-icon"><Icon size={18} /></div>
+                <span className="focus-label">{card.label}</span>
+              </div>
+              <strong>{card.title}</strong>
+              <p>{card.text}</p>
+              <button
+                type="button"
+                className={card.tone === "danger" || card.tone === "warning" ? "primary small" : "small"}
+                onClick={() => onAction(card)}
+              >
+                {card.button}
+              </button>
+            </article>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -2516,6 +2677,7 @@ function todayActionHint(row) {
 function statusClass(status) {
   if (status === "В плюсе") return "ok";
   if (["В минусе", "Минус с каждой продажи", "Нет данных WB"].includes(status)) return "bad";
+  if (status === "Заканчивается остаток") return "warn";
   if (status === "Ожидает расходы WB") return "neutral";
   return "warn";
 }
