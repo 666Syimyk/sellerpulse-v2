@@ -579,12 +579,25 @@ function Dashboard({ user, onLogout, onNavigate }) {
 
   const metrics = data?.metrics || {};
   const products = data?.products || [];
-  const statuses = useMemo(() => [...new Set(products.map((row) => row.status).filter(Boolean))], [products]);
+  const statusOptions = useMemo(() => {
+    const dynamicStatuses = [...new Set(products.map((row) => row.status).filter(Boolean))];
+    return [
+      ["all", "Все товары"],
+      ["loss", "Все убыточные"],
+      ["needs_cost", "Без себестоимости"],
+      ["stock_risk", "Заканчивается остаток"],
+      ["waiting_wb", "Ждут расходы WB"],
+      ["low_margin", "Низкая маржа"],
+      ...dynamicStatuses
+        .filter((status) => !["В минусе", "Минус с каждой продажи", "Нет себестоимости", "Заканчивается остаток", "Ожидает расходы WB", "Нет данных WB", "Низкая маржа"].includes(status))
+        .map((status) => [status, status]),
+    ];
+  }, [products]);
 
   const filteredProducts = useMemo(() => {
     const search = query.trim().toLowerCase();
     const filtered = [...products]
-      .filter((row) => statusFilter === "all" || row.status === statusFilter)
+      .filter((row) => matchesStatusFilter(row, statusFilter))
       .filter((row) => {
         if (!search) return true;
         return [row.nm_id, row.vendor_code, row.name, row.status, row.action]
@@ -612,6 +625,7 @@ function Dashboard({ user, onLogout, onNavigate }) {
   const hasWbApiData = data?.data_source?.type === "wb_api";
   const hasPreliminaryData = hasWbApiData && products.some((r) => r.status === "Ожидает расходы WB");
   const focusCards = useMemo(() => buildFocusCards(products, hasPreliminaryData), [products, hasPreliminaryData]);
+  const pulseSummary = useMemo(() => buildTodayPulseSummary(products), [products]);
 
   function applyFocusCard(card) {
     if (card.navigateTo) {
@@ -667,8 +681,7 @@ function Dashboard({ user, onLogout, onNavigate }) {
         <div className="dashboard-filters">
           <button type="button" className="export-btn" onClick={exportExcel} title="Скачать Excel"><Download size={16} /> Excel</button>
           <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-            <option value="all">Все статусы</option>
-            {statuses.map((status) => <option key={status} value={status}>{status}</option>)}
+            {statusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
           <select value={sortMode} onChange={(event) => setSortMode(event.target.value)}>
             <option value="attention">Сначала требуют внимания</option>
@@ -710,9 +723,13 @@ function Dashboard({ user, onLogout, onNavigate }) {
           <Expenses expenses={data.expenses} revenue={metrics.after_spp} />
           <TodayPulseTable
             rows={filteredProducts}
+            allRows={products}
             totalRows={products.length}
             query={query}
             onQueryChange={setQuery}
+            statusFilter={statusFilter}
+            onStatusFilterChange={setStatusFilter}
+            summary={pulseSummary}
             reload={load}
           />
         </>
@@ -738,7 +755,8 @@ function buildFocusCards(products, hasPreliminaryData) {
       label: "Риск прибыли",
       title: negativeRows.length === 1 ? "1 товар уходит в минус" : `${negativeRows.length} товаров уходят в минус`,
       text: previewRows(negativeRows, "Проверь цену, себестоимость и расходы по этим товарам в первую очередь."),
-      button: "Сортировать по убыточности",
+      button: "Показать убыточные",
+      statusFilter: "loss",
       sortMode: "profit_asc",
     });
   }
@@ -778,8 +796,9 @@ function buildFocusCards(products, hasPreliminaryData) {
       label: "WB данные",
       title: waitingFinanceRows.length === 1 ? "1 товар ждёт расходы WB" : `${waitingFinanceRows.length} товаров ждут расходы WB`,
       text: previewRows(waitingFinanceRows, "Продажи уже пришли, а точные расходы WB появятся после финансового отчёта."),
-      button: "Открыть отчёт WB",
-      navigateTo: "financial-report",
+      button: "Показать ожидание WB",
+      statusFilter: "waiting_wb",
+      sortMode: "attention",
     });
   }
 
@@ -818,6 +837,42 @@ function previewRows(rows, fallback) {
     .map((row) => row.vendor_code || row.name || `nmID ${row.nm_id}`)
     .join(", ");
   return preview ? `${preview}. ${fallback}` : fallback;
+}
+
+function matchesStatusFilter(row, statusFilter) {
+  if (statusFilter === "all") return true;
+  if (statusFilter === "loss") return ["В минусе", "Минус с каждой продажи"].includes(row.status);
+  if (statusFilter === "needs_cost") return row.status === "Нет себестоимости";
+  if (statusFilter === "stock_risk") return row.status === "Заканчивается остаток" || row.action === "Пополнить остаток";
+  if (statusFilter === "waiting_wb") return ["Ожидает расходы WB", "Нет данных WB"].includes(row.status);
+  if (statusFilter === "low_margin") return row.status === "Низкая маржа";
+  return row.status === statusFilter;
+}
+
+function buildTodayPulseSummary(rows) {
+  const soldQty = rows.reduce((sum, row) => sum + (row.sold_qty || 0), 0);
+  const negativeCount = rows.filter((row) => ["В минусе", "Минус с каждой продажи"].includes(row.status)).length;
+  const waitingCount = rows.filter((row) => ["Ожидает расходы WB", "Нет данных WB"].includes(row.status)).length;
+  const noCostCount = rows.filter((row) => row.status === "Нет себестоимости").length;
+  const stockRiskCount = rows.filter((row) => row.status === "Заканчивается остаток" || row.action === "Пополнить остаток").length;
+  const profitableCount = rows.filter((row) => row.status === "В плюсе").length;
+  const topProfitRow = [...rows]
+    .filter((row) => row.profit != null)
+    .sort((left, right) => nullableNumber(right.profit, Number.NEGATIVE_INFINITY) - nullableNumber(left.profit, Number.NEGATIVE_INFINITY))[0] || null;
+  const topLossRow = [...rows]
+    .filter((row) => row.profit != null)
+    .sort((left, right) => nullableNumber(left.profit, Number.POSITIVE_INFINITY) - nullableNumber(right.profit, Number.POSITIVE_INFINITY))[0] || null;
+
+  return {
+    soldQty,
+    negativeCount,
+    waitingCount,
+    noCostCount,
+    stockRiskCount,
+    profitableCount,
+    topProfitRow,
+    topLossRow,
+  };
 }
 
 function FocusBoard({ cards, onAction }) {
@@ -2497,7 +2552,16 @@ function financialActionHint(row) {
   return "Проверьте показатели товара.";
 }
 
-function TodayPulseTable({ rows, totalRows, query, onQueryChange, reload }) {
+function TodayPulseTable({ rows, allRows, totalRows, query, onQueryChange, statusFilter, onStatusFilterChange, summary, reload }) {
+  const quickFilters = [
+    { key: "all", label: "Все", count: totalRows },
+    { key: "loss", label: "Убыточные", count: summary.negativeCount },
+    { key: "needs_cost", label: "Без себестоимости", count: summary.noCostCount },
+    { key: "waiting_wb", label: "Ждут WB", count: summary.waitingCount },
+    { key: "stock_risk", label: "Нужна поставка", count: summary.stockRiskCount },
+    { key: "В плюсе", label: "В плюсе", count: summary.profitableCount },
+  ];
+
   return (
     <section className="panel pulse-panel">
       <div className="panel-head">
@@ -2506,6 +2570,45 @@ function TodayPulseTable({ rows, totalRows, query, onQueryChange, reload }) {
           <p>Только товары, которые сегодня продались. Расходы WB появятся после финансового отчёта.</p>
         </div>
         <Database size={22} />
+      </div>
+      <div className="pulse-summary-cards">
+        <div className="pulse-summary-card">
+          <span className="pulse-summary-label">Продано сегодня</span>
+          <span className="pulse-summary-value">{number(summary.soldQty)}</span>
+        </div>
+        <div className="pulse-summary-card pulse-summary-card--danger">
+          <span className="pulse-summary-label">Убыточные товары</span>
+          <span className="pulse-summary-value">{number(summary.negativeCount)}</span>
+        </div>
+        <div className="pulse-summary-card pulse-summary-card--warning">
+          <span className="pulse-summary-label">Без себестоимости</span>
+          <span className="pulse-summary-value">{number(summary.noCostCount)}</span>
+        </div>
+        <div className="pulse-summary-card pulse-summary-card--info">
+          <span className="pulse-summary-label">Ждут расходы WB</span>
+          <span className="pulse-summary-value">{number(summary.waitingCount)}</span>
+        </div>
+        <div className="pulse-summary-card pulse-summary-card--success">
+          <span className="pulse-summary-label">Лидер по прибыли</span>
+          <span className="pulse-summary-value pulse-summary-value--small">{summary.topProfitRow?.vendor_code || summary.topProfitRow?.name || "—"}</span>
+        </div>
+        <div className="pulse-summary-card pulse-summary-card--neutral">
+          <span className="pulse-summary-label">Главный риск</span>
+          <span className="pulse-summary-value pulse-summary-value--small">{summary.topLossRow?.vendor_code || summary.topLossRow?.name || "—"}</span>
+        </div>
+      </div>
+      <div className="pulse-filter-chips">
+        {quickFilters.map((filter) => (
+          <button
+            key={filter.key}
+            type="button"
+            className={`pulse-filter-chip ${statusFilter === filter.key ? "active" : ""}`}
+            onClick={() => onStatusFilterChange(filter.key)}
+          >
+            {filter.label}
+            <span>{number(filter.count)}</span>
+          </button>
+        ))}
       </div>
       <div className="pulse-toolbar">
         <label className="search-box pulse-search">
@@ -2516,7 +2619,7 @@ function TodayPulseTable({ rows, totalRows, query, onQueryChange, reload }) {
             onChange={(event) => onQueryChange(event.target.value)}
           />
         </label>
-        <span>{rows.length} из {totalRows} товаров</span>
+        <span>{rows.length} из {totalRows} товаров{rows.length !== allRows.length ? ` · фильтр: ${quickFilters.find((filter) => filter.key === statusFilter)?.label || "выбран"}` : ""}</span>
       </div>
       <div className="table-wrap">
         <table className="pulse-table">
