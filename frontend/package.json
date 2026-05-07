@@ -5,14 +5,18 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "build:pages": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "check": "npm run test && npm run build"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
+    "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "lucide-react": "latest"
+    "vite": "latest"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "vitest": "^4.1.5"
+  }
 }

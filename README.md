@@ -60,6 +60,14 @@ npm run dev
 
 Откройте `http://localhost:5173`.
 
+Проверка frontend:
+
+```bash
+cd frontend
+npm run test
+npm run check
+```
+
 ## Что реализовано
 
 - 3 основных экрана: вход/регистрация, подключение WB API-токена, Dashboard.
